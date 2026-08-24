@@ -1,180 +1,46 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef } from "react";
 import * as d3 from "d3";
 
-export default function ComparisonView({ data1, data2, label1, label2 }) {
+/**
+ * Side-by-side trace comparison with diff highlighting.
+ * addedMethods / removedMethods come from the backend diff API.
+ */
+export default function ComparisonView({
+    data1,
+    data2,
+    label1,
+    label2,
+    addedMethods = [],
+    removedMethods = []
+}) {
     const ref1 = useRef(null);
     const ref2 = useRef(null);
     const containerRef = useRef(null);
 
-    useEffect(() => {
-        if (!data1 || !ref1.current || !containerRef.current) return;
-
-        const container = d3.select(containerRef.current);
-        const svg1 = d3.select(ref1.current);
-        svg1.selectAll("*").remove();
-
-        const width = 600;
-        const height = 600;
-        const dx = 110;
-        const dy = 250;
-
-        const root = d3.hierarchy(data1, d => d.children);
-        const treeLayout = d3.tree().nodeSize([dx, dy]);
-        treeLayout(root);
-
-        svg1
-            .attr("width", width)
-            .attr("height", height)
-            .style("background-color", "#0a1225")
-            .style("border-radius", "8px")
-            .style("border", "1px solid #1f365d");
-
-        const g = svg1.append("g").attr("transform", `translate(100, 50)`);
-
-        g.selectAll(".link")
-            .data(root.links())
-            .join("path")
-            .attr("class", "link")
-            .attr("fill", "none")
-            .attr("stroke", "#7b8ca5")
-            .attr("stroke-width", 2)
-            .attr("d", d3.linkHorizontal().x(d => d.y).y(d => d.x));
-
-        const nodes = g
-            .selectAll(".node")
-            .data(root.descendants())
-            .join("g")
-            .attr("class", "node")
-            .attr("transform", d => `translate(${d.y}, ${d.x})`);
-
-        nodes
-            .append("circle")
-            .attr("r", 6)
-            .attr("stroke", "#64b5f6")
-            .attr("stroke-width", 2)
-            .attr("fill", d => {
-                const time = d.data.executionTimeMs;
-                if (time == null) return "#818c9f";
-                const ratio = Math.min(time / 200, 1);
-                return d3.interpolateRgb("#4cd964", "#f39c12")(ratio);
-            });
-
-        nodes
-            .append("text")
-            .attr("dy", "-16px")
-            .attr("text-anchor", "middle")
-            .style("font-size", "11px")
-            .style("fill", "#f4f8ff")
-            .style("pointer-events", "none")
-            .text(d => {
-                let label = (d.data.method || d.data.methodName || "ROOT");
-                const lastDot = label.lastIndexOf(".");
-                if (lastDot >= 0) label = label.slice(lastDot + 1);
-                const paren = label.indexOf("(");
-                if (paren >= 0) label = label.slice(0, paren);
-                return label;
-            });
-
-        nodes
-            .append("text")
-            .attr("dy", "16px")
-            .attr("text-anchor", "middle")
-            .style("font-size", "10px")
-            .style("fill", "#aad2ff")
-            .style("pointer-events", "none")
-            .text(d => (d.data.executionTimeMs != null ? `${d.data.executionTimeMs}ms` : ""));
-
-    }, [data1]);
+    const addedSet = new Set(addedMethods);
+    const removedSet = new Set(removedMethods);
 
     useEffect(() => {
-        if (!data2 || !ref2.current || !containerRef.current) return;
+        if (!data1 || !ref1.current) return;
+        renderTree(ref1.current, data1, removedSet, "removed");
+    }, [data1, removedMethods]);
 
-        const svg2 = d3.select(ref2.current);
-        svg2.selectAll("*").remove();
-
-        const width = 600;
-        const height = 600;
-        const dx = 110;
-        const dy = 250;
-
-        const root = d3.hierarchy(data2, d => d.children);
-        const treeLayout = d3.tree().nodeSize([dx, dy]);
-        treeLayout(root);
-
-        svg2
-            .attr("width", width)
-            .attr("height", height)
-            .style("background-color", "#0a1225")
-            .style("border-radius", "8px")
-            .style("border", "1px solid #1f365d");
-
-        const g = svg2.append("g").attr("transform", `translate(100, 50)`);
-
-        g.selectAll(".link")
-            .data(root.links())
-            .join("path")
-            .attr("class", "link")
-            .attr("fill", "none")
-            .attr("stroke", "#7b8ca5")
-            .attr("stroke-width", 2)
-            .attr("d", d3.linkHorizontal().x(d => d.y).y(d => d.x));
-
-        const nodes = g
-            .selectAll(".node")
-            .data(root.descendants())
-            .join("g")
-            .attr("class", "node")
-            .attr("transform", d => `translate(${d.y}, ${d.x})`);
-
-        nodes
-            .append("circle")
-            .attr("r", 6)
-            .attr("stroke", "#64b5f6")
-            .attr("stroke-width", 2)
-            .attr("fill", d => {
-                if (d.data.hasError) return "#ff5f5f";
-                const time = d.data.executionTimeMs;
-                if (time == null) return "#818c9f";
-                const ratio = Math.min(time / 200, 1);
-                return d3.interpolateRgb("#4cd964", "#f39c12")(ratio);
-            });
-
-        nodes
-            .append("text")
-            .attr("dy", "-16px")
-            .attr("text-anchor", "middle")
-            .style("font-size", "11px")
-            .style("fill", "#f4f8ff")
-            .style("pointer-events", "none")
-            .text(d => {
-                let label = (d.data.method || d.data.methodName || "ROOT");
-                const lastDot = label.lastIndexOf(".");
-                if (lastDot >= 0) label = label.slice(lastDot + 1);
-                const paren = label.indexOf("(");
-                if (paren >= 0) label = label.slice(0, paren);
-                return label;
-            });
-
-        nodes
-            .append("text")
-            .attr("dy", "16px")
-            .attr("text-anchor", "middle")
-            .style("font-size", "10px")
-            .style("fill", "#aad2ff")
-            .style("pointer-events", "none")
-            .text(d => (d.data.executionTimeMs != null ? `${d.data.executionTimeMs}ms` : ""));
-
-    }, [data2]);
+    useEffect(() => {
+        if (!data2 || !ref2.current) return;
+        renderTree(ref2.current, data2, addedSet, "added");
+    }, [data2, addedMethods]);
 
     return (
         <div
             ref={containerRef}
+            role="region"
+            aria-label="Side-by-side trace comparison"
             style={{
                 width: "100%",
                 display: "grid",
                 gridTemplateColumns: "1fr 1fr",
                 gap: 16,
-                padding: 16,
+                padding: 8,
                 background: "linear-gradient(180deg, #0b1228 0%, #0a1432 100%)",
                 borderRadius: 12
             }}
@@ -182,15 +48,124 @@ export default function ComparisonView({ data1, data2, label1, label2 }) {
             <div>
                 <div style={{ fontSize: 13, color: "#cbd5e1", marginBottom: 8 }}>
                     <strong>{label1}</strong>
+                    {removedMethods.length > 0 && (
+                        <span style={{ fontSize: 11, color: "#fca5a5", marginLeft: 8 }}>
+                            ({removedMethods.length} removed in compare)
+                        </span>
+                    )}
                 </div>
-                <svg ref={ref1} style={{ width: "100%", maxWidth: "600px" }} />
+                <svg ref={ref1} style={{ width: "100%", minHeight: 260 }} aria-label={`Trace ${label1}`} />
             </div>
             <div>
                 <div style={{ fontSize: 13, color: "#cbd5e1", marginBottom: 8 }}>
                     <strong>{label2}</strong>
+                    {addedMethods.length > 0 && (
+                        <span style={{ fontSize: 11, color: "#86efac", marginLeft: 8 }}>
+                            ({addedMethods.length} added vs base)
+                        </span>
+                    )}
                 </div>
-                <svg ref={ref2} style={{ width: "100%", maxWidth: "600px" }} />
+                <svg ref={ref2} style={{ width: "100%", minHeight: 260 }} aria-label={`Trace ${label2}`} />
             </div>
         </div>
     );
+}
+
+function renderTree(svgEl, data, highlightSet, highlightType) {
+    const svg = d3.select(svgEl);
+    svg.selectAll("*").remove();
+
+    const containerWidth = svgEl.parentElement?.clientWidth || 500;
+    const dx = 120;
+    const dy = 70;
+
+    const root = d3.hierarchy(data, (d) => d.children);
+    d3.tree().nodeSize([dx, dy])(root);
+
+    const x0 = d3.min(root.descendants(), (d) => d.x) ?? 0;
+    const x1 = d3.max(root.descendants(), (d) => d.x) ?? 0;
+    const y1 = d3.max(root.descendants(), (d) => d.y) ?? 0;
+
+    const width = Math.max(containerWidth, x1 - x0 + dx * 2);
+    const height = Math.max(260, y1 + dy * 2);
+
+    svg.attr("viewBox", [0, 0, width, height])
+        .attr("width", "100%")
+        .attr("height", height);
+
+    const g = svg.append("g").attr("transform", `translate(${width / 2 - (x0 + x1) / 2}, 30)`);
+
+    g.selectAll(".link")
+        .data(root.links())
+        .join("path")
+        .attr("fill", "none")
+        .attr("stroke", "#4b5563")
+        .attr("stroke-width", 1.5)
+        .attr("d", d3.linkVertical().x((d) => d.x).y((d) => d.y));
+
+    const nodes = g
+        .selectAll(".node")
+        .data(root.descendants())
+        .join("g")
+        .attr("transform", (d) => `translate(${d.x},${d.y})`);
+
+    nodes
+        .append("circle")
+        .attr("r", 6)
+        .attr("stroke", (d) => nodeStroke(d, highlightSet, highlightType))
+        .attr("stroke-width", (d) => (isHighlighted(d, highlightSet) ? 2.5 : 1.5))
+        .attr("fill", (d) => nodeFill(d, highlightSet, highlightType));
+
+    nodes
+        .append("text")
+        .attr("dy", -12)
+        .attr("text-anchor", "middle")
+        .style("font-size", "10px")
+        .style("fill", "#f4f8ff")
+        .text((d) => shortLabel(d.data));
+
+    nodes
+        .append("text")
+        .attr("dy", 14)
+        .attr("text-anchor", "middle")
+        .style("font-size", "9px")
+        .style("fill", "#94a3b8")
+        .style("font-family", "ui-monospace, monospace")
+        .text((d) => (d.data.executionTimeMs != null ? `${d.data.executionTimeMs}ms` : ""));
+}
+
+function methodKey(data) {
+    return data?.methodName ?? data?.method ?? "";
+}
+
+function isHighlighted(d, highlightSet) {
+    return highlightSet.has(methodKey(d.data));
+}
+
+function nodeStroke(d, highlightSet, highlightType) {
+    if (d.data.status === "ERROR" || d.data.hasError) return "#ef4444";
+    if (isHighlighted(d, highlightSet)) {
+        return highlightType === "added" ? "#22c55e" : "#ef4444";
+    }
+    return "#64b5f6";
+}
+
+function nodeFill(d, highlightSet, highlightType) {
+    if (d.data.status === "ERROR" || d.data.hasError) return "#7f1d1d";
+    if (isHighlighted(d, highlightSet)) {
+        return highlightType === "added" ? "#14532d" : "#7f1d1d";
+    }
+    const time = d.data.executionTimeMs;
+    if (time == null) return "#374151";
+    const ratio = Math.min(time / 200, 1);
+    return d3.interpolateRgb("#166534", "#b45309")(ratio);
+}
+
+function shortLabel(data) {
+    let label = methodKey(data) || "ROOT";
+    const lastDot = label.lastIndexOf(".");
+    if (lastDot >= 0) label = label.slice(lastDot + 1);
+    const paren = label.indexOf("(");
+    if (paren >= 0) label = label.slice(0, paren);
+    return label.length > 20 ? label.slice(0, 17) + "..." : label;
 }

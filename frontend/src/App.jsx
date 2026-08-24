@@ -3,6 +3,7 @@ import TraceTree from "./components/TraceTree";
 import RequestTimeline from "./components/RequestTimeline";
 import FlameGraph from "./components/FlameGraph";
 import OverlayTimeline from "./components/OverlayTimeline";
+import ComparisonView from "./components/ComparisonView";
 import CodePreview from "./components/CodePreview";
 import MetricsDashboard from "./components/MetricsDashboard";
 import { connectWebSocket, disconnectWebSocket } from "./services/websocket";
@@ -11,7 +12,11 @@ import {
     fetchTraceAnalysis,
     fetchMetricsDashboard,
     persistTrace,
-    exportUrl
+    exportUrl,
+    otelExportUrl,
+    searchTraces,
+    fetchTraceHistory,
+    fetchAlerts
 } from "./services/traceApi";
 
 /*
@@ -41,6 +46,12 @@ export default function App() {
     const [metricsLoading, setMetricsLoading] = useState(false);
     const [metricsError, setMetricsError] = useState(null);
     const [shareLink, setShareLink] = useState(null);
+    const [traceSearchMethod, setTraceSearchMethod] = useState("");
+    const [traceSearchMinMs, setTraceSearchMinMs] = useState("");
+    const [traceSearchErrorsOnly, setTraceSearchErrorsOnly] = useState(false);
+    const [searchResults, setSearchResults] = useState([]);
+    const [historyTraces, setHistoryTraces] = useState([]);
+    const [alerts, setAlerts] = useState([]);
 
     useEffect(() => {
         connectWebSocket((event) => {
@@ -175,6 +186,66 @@ export default function App() {
         };
     }, [eventsByRequest]);
 
+    useEffect(() => {
+        let cancelled = false;
+        const runSearch = () => {
+            const minMs = traceSearchMinMs ? Number(traceSearchMinMs) : undefined;
+            searchTraces({
+                method: traceSearchMethod || undefined,
+                minDurationMs: minMs,
+                hasError: traceSearchErrorsOnly ? true : undefined
+            })
+                .then((results) => {
+                    if (!cancelled) setSearchResults(results);
+                })
+                .catch(() => {
+                    if (!cancelled) setSearchResults([]);
+                });
+        };
+        runSearch();
+        const interval = setInterval(runSearch, 10000);
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, [eventsByRequest, traceSearchMethod, traceSearchMinMs, traceSearchErrorsOnly]);
+
+    useEffect(() => {
+        let cancelled = false;
+        fetchTraceHistory()
+            .then((history) => {
+                if (!cancelled) setHistoryTraces(history);
+            })
+            .catch(() => {
+                if (!cancelled) setHistoryTraces([]);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [eventsByRequest]);
+
+    useEffect(() => {
+        let cancelled = false;
+        fetchAlerts(selectedRequestId || undefined)
+            .then((data) => {
+                if (!cancelled) setAlerts(data);
+            })
+            .catch(() => {
+                if (!cancelled) setAlerts([]);
+            });
+        const interval = setInterval(() => {
+            fetchAlerts(selectedRequestId || undefined)
+                .then((data) => {
+                    if (!cancelled) setAlerts(data);
+                })
+                .catch(() => {});
+        }, 15000);
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, [selectedRequestId, eventsByRequest]);
+
     return (
         <div
             style={{
@@ -307,6 +378,7 @@ export default function App() {
                         placeholder="Filter methods in tree…"
                         value={methodFilter}
                         onChange={(e) => setMethodFilter(e.target.value)}
+                        aria-label="Filter methods in trace tree"
                         style={{
                             marginBottom: 10,
                             padding: "6px 8px",
@@ -318,6 +390,85 @@ export default function App() {
                             outline: "none"
                         }}
                     />
+
+                    <div
+                        style={{
+                            marginBottom: 10,
+                            padding: 8,
+                            borderRadius: 10,
+                            border: "1px solid rgba(55,65,81,0.6)",
+                            background: "rgba(2,6,23,0.6)"
+                        }}
+                    >
+                        <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 6, color: "#cbd5e1" }}>
+                            Trace search
+                        </div>
+                        <input
+                            type="text"
+                            placeholder="Method name…"
+                            value={traceSearchMethod}
+                            onChange={(e) => setTraceSearchMethod(e.target.value)}
+                            aria-label="Search traces by method name"
+                            style={{
+                                width: "100%",
+                                marginBottom: 4,
+                                padding: "4px 8px",
+                                borderRadius: 6,
+                                border: "1px solid #4b5563",
+                                background: "#020617",
+                                color: "#e5e7eb",
+                                fontSize: 11
+                            }}
+                        />
+                        <input
+                            type="number"
+                            placeholder="Min duration (ms)"
+                            value={traceSearchMinMs}
+                            onChange={(e) => setTraceSearchMinMs(e.target.value)}
+                            aria-label="Minimum trace duration in milliseconds"
+                            style={{
+                                width: "100%",
+                                marginBottom: 4,
+                                padding: "4px 8px",
+                                borderRadius: 6,
+                                border: "1px solid #4b5563",
+                                background: "#020617",
+                                color: "#e5e7eb",
+                                fontSize: 11
+                            }}
+                        />
+                        <label style={{ fontSize: 10, color: "#9ca3af", display: "flex", gap: 4, alignItems: "center" }}>
+                            <input
+                                type="checkbox"
+                                checked={traceSearchErrorsOnly}
+                                onChange={(e) => setTraceSearchErrorsOnly(e.target.checked)}
+                            />
+                            Errors only
+                        </label>
+                        {searchResults.length > 0 && (
+                            <div style={{ marginTop: 6, maxHeight: 80, overflowY: "auto" }}>
+                                {searchResults.slice(0, 5).map((r) => (
+                                    <button
+                                        key={r.requestId}
+                                        onClick={() => setSelectedRequestId(r.requestId)}
+                                        style={{
+                                            display: "block",
+                                            width: "100%",
+                                            textAlign: "left",
+                                            background: "transparent",
+                                            border: "none",
+                                            color: "#93c5fd",
+                                            fontSize: 10,
+                                            cursor: "pointer",
+                                            padding: "2px 0"
+                                        }}
+                                    >
+                                        {r.requestId.slice(0, 12)}… ({r.totalDurationMs}ms)
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
 
                     {requestIds.length === 0 && (
                         <p
@@ -455,6 +606,15 @@ export default function App() {
                                     >
                                         PDF
                                     </a>
+                                    <a
+                                        href={otelExportUrl(selectedRequestId)}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        style={linkButtonStyle}
+                                        title="OpenTelemetry JSON export"
+                                    >
+                                        OTEL
+                                    </a>
                                     <button
                                         onClick={async () => {
                                             try {
@@ -495,6 +655,56 @@ export default function App() {
                         loading={metricsLoading}
                         error={metricsError}
                     />
+
+                    {historyTraces.length > 0 && (
+                        <div
+                            style={{
+                                marginTop: 10,
+                                paddingTop: 10,
+                                borderTop: "1px solid rgba(55,65,81,0.6)"
+                            }}
+                        >
+                            <div style={{ fontSize: 11, fontWeight: 600, color: "#cbd5e1", marginBottom: 6 }}>
+                                Persisted history ({historyTraces.length})
+                            </div>
+                            <div style={{ maxHeight: 100, overflowY: "auto" }}>
+                                {historyTraces.slice(0, 8).map((h) => (
+                                    <div key={h.shareId} style={{ fontSize: 10, color: "#9ca3af", marginBottom: 4 }}>
+                                        {h.requestId.slice(0, 10)}… — {h.totalDurationMs}ms
+                                        {h.hasError && (
+                                            <span style={{ color: "#fca5a5", marginLeft: 4 }}>ERR</span>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {alerts.length > 0 && (
+                        <div
+                            style={{
+                                marginTop: 10,
+                                paddingTop: 10,
+                                borderTop: "1px solid rgba(55,65,81,0.6)"
+                            }}
+                        >
+                            <div style={{ fontSize: 11, fontWeight: 600, color: "#fde68a", marginBottom: 6 }}>
+                                Alerts ({alerts.length})
+                            </div>
+                            {alerts.slice(0, 5).map((a, i) => (
+                                <div
+                                    key={`${a.requestId}-${a.rule}-${i}`}
+                                    style={{
+                                        fontSize: 10,
+                                        color: a.severity === "ERROR" ? "#fca5a5" : "#fde68a",
+                                        marginBottom: 4
+                                    }}
+                                >
+                                    [{a.rule}] {a.message}
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </aside>
 
                 <main
@@ -879,49 +1089,14 @@ export default function App() {
                                         paddingTop: 8
                                     }}
                                 >
-                                    <div
-                                        style={{
-                                            display: "flex",
-                                            justifyContent: "space-between",
-                                            alignItems: "center",
-                                            marginBottom: 4
-                                        }}
-                                    >
-                                        <span
-                                            style={{
-                                                fontSize: 12,
-                                                color: "#e5e7eb"
-                                            }}
-                                        >
-                                            Compare with{" "}
-                                            <code>{compareRequestId}</code>
-                                        </span>
-                                    </div>
-                                    <div
-                                        style={{
-                                            height: 260,
-                                            borderRadius: 10,
-                                            background:
-                                                "radial-gradient(circle at top left,#020617,#020617)",
-                                            border:
-                                                "1px solid rgba(55,65,81,0.8)",
-                                            overflow: "hidden"
-                                        }}
-                                    >
-                                        {viewMode === "tree" ? (
-                                            <TraceTree
-                                                data={compareTrace}
-                                                slowPathEventIds={new Set()}
-                                                methodFilter={methodFilter}
-                                                collapsedEventIds={
-                                                    new Set()
-                                                }
-                                            />
-                                        ) : (
-                                            <FlameGraph data={compareTrace} />
-                                        )}
-                                    </div>
-                                    <RequestTimeline events={compareFlatEvents} />
+                                    <ComparisonView
+                                        data1={selectedTrace}
+                                        data2={compareTrace}
+                                        label1={selectedRequestId?.slice(0, 16) + "…"}
+                                        label2={compareRequestId?.slice(0, 16) + "…"}
+                                        addedMethods={diffReport?.addedMethods || []}
+                                        removedMethods={diffReport?.removedMethods || []}
+                                    />
                                     <OverlayTimeline
                                         baseEvents={flatEvents}
                                         compareEvents={compareFlatEvents}

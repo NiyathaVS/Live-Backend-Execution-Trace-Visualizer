@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useMemo } from "react";
+import React, { useEffect, useRef, useCallback } from "react";
 import * as d3 from "d3";
 
 export default function TraceTree({
@@ -10,6 +10,37 @@ export default function TraceTree({
     onToggleCollapse
 }) {
     const ref = useRef(null);
+    const nodeIndexRef = useRef([]);
+    const focusedIndexRef = useRef(0);
+
+    const handleKeyDown = useCallback((event) => {
+        const nodes = nodeIndexRef.current;
+        if (nodes.length === 0) return;
+
+        if (event.key === "ArrowDown") {
+            event.preventDefault();
+            focusedIndexRef.current = Math.min(focusedIndexRef.current + 1, nodes.length - 1);
+            focusNode(nodes[focusedIndexRef.current]);
+        } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            focusedIndexRef.current = Math.max(focusedIndexRef.current - 1, 0);
+            focusNode(nodes[focusedIndexRef.current]);
+        } else if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            const node = nodes[focusedIndexRef.current];
+            if (node && onNodeClick) onNodeClick(node.data);
+        } else if (event.key === "Escape" && onToggleCollapse) {
+            const node = nodes[focusedIndexRef.current];
+            if (node?.data?.eventId) onToggleCollapse(node.data.eventId);
+        }
+    }, [onNodeClick, onToggleCollapse]);
+
+    function focusNode(d3Node) {
+        if (!d3Node) return;
+        const circle = d3.select(d3Node).select("circle");
+        circle.attr("stroke", "#fbbf24").attr("stroke-width", 3);
+        d3Node.focus?.();
+    }
 
     useEffect(() => {
         if (!data) return;
@@ -17,6 +48,8 @@ export default function TraceTree({
         const svgEl = ref.current;
         const svg = d3.select(svgEl);
         svg.selectAll("*").remove();
+        nodeIndexRef.current = [];
+        focusedIndexRef.current = 0;
 
         const containerWidth = svgEl.parentElement
             ? svgEl.parentElement.clientWidth
@@ -85,14 +118,42 @@ export default function TraceTree({
             .data(root.descendants())
             .join("g")
             .attr("class", "node")
+            .attr("role", "treeitem")
+            .attr("tabindex", (d, i) => (i === 0 ? 0 : -1))
+            .attr("aria-label", (d) => {
+                const name = d.data.methodName ?? d.data.method ?? "ROOT";
+                const dur = d.data.executionTimeMs;
+                return `${name}, ${dur != null ? dur + " milliseconds" : "unknown duration"}`;
+            })
             .attr("transform", (d) => `translate(${d.x},${d.y})`)
             .style("opacity", (d) => (isDimmed(d, methodFilter) ? 0.35 : 1))
             .style("cursor", "pointer")
+            .each(function () {
+                nodeIndexRef.current.push(this);
+            })
             .on("click", (event, d) => {
                 event.stopPropagation();
                 if (onNodeClick) {
                     onNodeClick(d.data);
                 }
+            })
+            .on("focus", function () {
+                d3.select(this).select("circle")
+                    .attr("stroke", "#fbbf24")
+                    .attr("stroke-width", 3);
+            })
+            .on("blur", function (event, d) {
+                d3.select(this).select("circle")
+                    .attr("stroke", (d) => {
+                        if (d.data.status === "ERROR") return "#ef4444";
+                        if (d.data.slowQuery) return "#f97316";
+                        if (isOnSlowPath(d, slowPathEventIds)) return "#f97316";
+                        if (isSqlNode(d.data)) return "#38bdf8";
+                        return "#e5e7eb";
+                    })
+                    .attr("stroke-width", (d) =>
+                        d.data.slowQuery || isOnSlowPath(d, slowPathEventIds) ? 2.5 : 1.2
+                    );
             });
 
         node.append("circle")
@@ -184,9 +245,19 @@ Error: ${d.data.errorMessage || "-"}`;
                     onNodeClick(d.data);
                 }
             });
+        g.attr("role", "group");
     }, [data, slowPathEventIds, methodFilter, collapsedEventIds, onNodeClick, onToggleCollapse]);
 
-    return <svg ref={ref} />;
+    return (
+        <svg
+            ref={ref}
+            role="tree"
+            aria-label="Execution trace call tree"
+            tabIndex={0}
+            onKeyDown={handleKeyDown}
+            style={{ outline: "none" }}
+        />
+    );
 }
 
 function isSqlNode(data) {
