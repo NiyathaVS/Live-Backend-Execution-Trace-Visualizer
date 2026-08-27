@@ -264,3 +264,16 @@ trace-data/
 *.dump
 heap-dump-*.hprof
 
+
+# instrumented-app build artifacts
+instrumented-app/.gradle/
+instrumented-app/build/
+instrumented-app/bin/
+
+# Personal planning/scratch notes (not for public repo)
+Strategy.md
+TBD.md
+Understanding.md
+Version2.md
+IMPLEMENTATION_SUMMARY.md
+SOURCE_CODE_PREVIEW.md
