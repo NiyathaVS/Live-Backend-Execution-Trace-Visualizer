@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: instrumented-app
+
+trace:
+  enabled: true
+  # Maximum number of traces to keep in memory (LRU eviction when exceeded)
+  max-traces: 1000
+  # Trace retention time in seconds (0 = unlimited)
+  ttl-seconds: 3600
+  # Sampling configuration: 'all', 'slow' (>500ms), or percentage (e.g., '10' for 10%)
+  sampling: all
+  sql:
+    slow-threshold-ms: 500
+  persistence:
+    dir: ./trace-data
+    retention-days: 7
+  # Sensitive data redaction (passwords, tokens, API keys, PII)
+  redaction:
+    enabled: true
+  # WebSocket configuration
+  websocket:
+    # Allowed origins for WebSocket connections (comma-separated)
+    # For production, set this to your frontend domain(s)
+    # Example: "https://myapp.com,https://api.myapp.com"
+    allowed-origins: "http://localhost:3000,http://localhost:5173"
+  alerts:
+    slow-request-ms: 1000
+    max-error-nodes: 0
+    error-rate-threshold: 0.25
