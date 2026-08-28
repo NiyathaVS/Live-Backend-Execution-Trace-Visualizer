@@ -45,7 +45,9 @@ Frontend runs on **http://localhost:5173**
 - **Memory management**: TTL + LRU eviction (default: 1000 traces, 1-hour TTL)
 - **Sensitive data redaction**: passwords, tokens, API keys, PII
 - **Configurable CORS** for WebSocket connections
-- **Comprehensive test suite** with 95%+ coverage
+- **WebSocket authentication**: shared-secret token (disabled by default, one config line to enable)
+- **Auto-reconnect**: exponential backoff on WebSocket disconnect (1 s → 30 s cap)
+- **Comprehensive test suite**: backend JUnit + frontend Vitest (17 tests)
 - **CI/CD pipeline** via GitHub Actions
 
 ### 📊 Rich Visualizations
@@ -80,6 +82,7 @@ trace:
     enabled: true           # Redact sensitive data
   websocket:
     allowed-origins: "http://localhost:3000,http://localhost:5173"
+    auth-token: "none"      # Set to a secret string to enable WS auth
 ```
 
 ### Frontend (`.env`)
@@ -89,6 +92,9 @@ VITE_WS_URL=ws://localhost:8080/ws/traces
 
 # Or use API URL (WebSocket URL will be derived)
 VITE_API_URL=http://localhost:8080
+
+# Optional: must match trace.websocket.auth-token when auth is enabled
+# VITE_WS_TOKEN=your-secret
 ```
 
 ## 🧪 Testing
@@ -99,6 +105,12 @@ cd instrumented-app
 ./gradlew test
 ```
 
+### Run Frontend Tests
+```bash
+cd frontend
+npm test
+```
+
 ### Run Frontend Build
 ```bash
 cd frontend
@@ -106,9 +118,10 @@ npm run build
 ```
 
 ### Test Coverage
-- **Unit tests**: Call tree building, diff logic, redaction
-- **Integration tests**: Concurrent access, WebSocket broadcasting
-- **Edge cases**: Out-of-order events, duplicate methods, errors
+- **Backend unit tests**: Call tree building, diff logic, redaction, metrics
+- **Backend integration tests**: Concurrent access, WebSocket broadcasting
+- **Frontend unit tests** (Vitest): `computeMetrics`, `flattenEvents`, `buildTracesFromEvents`, `extractClassNameFromMethod` — 17 tests
+- **Edge cases**: Out-of-order events, orphan spans, duplicate methods, errors
 
 ## 📡 REST API
 
@@ -146,17 +159,20 @@ npm run build
 - `InMemoryTraceCollector` - Tree builder with sampling & retention
 - `SensitiveDataRedactor` - Pattern-based data redaction
 - `TraceWebSocketHandler` - Real-time event broadcasting
+- `WebSocketAuthInterceptor` - Shared-secret handshake guard
 
 **Frontend**:
 - `App.jsx` - Main UI with request management
 - `TraceTree.jsx` - D3-based tree visualization
 - `FlameGraph.jsx` - Horizontal flame graph
-- `websocket.js` - WebSocket client with configurable URL
+- `websocket.js` - WebSocket client with reconnect + configurable URL
+- `traceUtils.js` - Pure utility functions (tree building, metrics)
 
 ## 🔐 Security
 
 - **Sensitive data redaction** enabled by default
 - **CORS origins** configurable for production
+- **WebSocket authentication** via shared-secret token (opt-in, zero config for dev)
 - **No arbitrary code execution** in replay endpoint
 - **Input validation** on all REST endpoints
 
@@ -172,6 +188,7 @@ trace:
     enabled: true             # Always enable in production
   websocket:
     allowed-origins: "https://your-domain.com"
+    auth-token: "change-me-to-a-strong-random-secret"
 ```
 
 ### Environment Variables
@@ -179,6 +196,7 @@ trace:
 # Frontend
 VITE_WS_URL=wss://api.your-domain.com/ws/traces
 VITE_API_URL=https://api.your-domain.com
+VITE_WS_TOKEN=change-me-to-a-strong-random-secret
 ```
 
 ## 🤝 Contributing

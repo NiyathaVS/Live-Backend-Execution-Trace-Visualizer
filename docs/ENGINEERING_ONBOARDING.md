@@ -134,21 +134,27 @@ npm run dev
 
 Vite port: see `frontend/vite.config.js` (default **5173**, configurable via `VITE_PORT`).
 
-### WebSocket URL Configuration
+### WebSocket URL & Auth Configuration
 
-**Now configurable via `.env` file**:
+**Configurable via `.env` file**:
 
 1. Copy `frontend/.env.example` to `frontend/.env`
 2. Set `VITE_WS_URL` or `VITE_API_URL`:
    ```bash
    # Option 1: Direct WebSocket URL
    VITE_WS_URL=ws://localhost:8080/ws/traces
-   
+
    # Option 2: API URL (WebSocket URL derived)
    VITE_API_URL=http://localhost:8080
    ```
+3. (Optional) Enable auth by matching `VITE_WS_TOKEN` to `trace.websocket.auth-token`:
+   ```bash
+   VITE_WS_TOKEN=your-strong-secret
+   ```
 
-Default fallback: `ws://localhost:8080/ws/traces`
+Default fallback URL: `ws://localhost:8080/ws/traces`. Auth is disabled by default.
+
+**Auto-reconnect** is built in — the client retries with exponential backoff (1 s → 30 s cap) on any unexpected close.
 
 ---
 
@@ -166,6 +172,7 @@ trace:
     enabled: true           # Redact passwords, tokens, PII
   websocket:
     allowed-origins: "http://localhost:3000,http://localhost:5173"
+    auth-token: "none"      # "none" = auth disabled; set a secret to protect the WS endpoint
 ```
 
 **Production recommendations**:
@@ -173,49 +180,59 @@ trace:
 - Lower `max-traces` to 500 or less for memory efficiency
 - Reduce `ttl-seconds` to 1800 (30 minutes) or less
 - **Always** enable `redaction.enabled: true`
+- Set `auth-token` to a strong random string and supply `VITE_WS_TOKEN` on the frontend
 - Set `allowed-origins` to your actual frontend domain(s)
 
 ### 7.2 Security Notes
 
-- **✅ CORS / origins**: Now configurable via `trace.websocket.allowed-origins`—**must** be set for production
-- **✅ PII / secrets**: Automatic redaction enabled by default—detects passwords, tokens, API keys, long hex/base64 strings
+- **✅ CORS / origins**: Configurable via `trace.websocket.allowed-origins` — **must** be set for production
+- **✅ PII / secrets**: Automatic redaction enabled by default — detects passwords, tokens, API keys, long hex/base64 strings
+- **✅ WebSocket auth**: `WebSocketAuthInterceptor` rejects upgrades with wrong/missing `?token=` — disabled by default, one config line to enable
 - **✅ Memory**: TTL + LRU eviction prevents unbounded growth
 - **⚠️ Concurrency**: `TraceStack` is per-thread; async hops (`@Async`, reactive) require additional propagation work
 
 ### 7.3 Testing
 
-**Comprehensive test suite** with 95%+ coverage:
+#### Backend
 ```bash
 cd instrumented-app
 ./gradlew test
 ```
+Covers: call tree building, span IDs, diff logic, redaction, concurrent access, WebSocket broadcasting.
 
-Tests cover:
-- Call tree building with span IDs
-- Diff logic (added/removed methods, timing deltas)
-- Sensitive data redaction
-- Concurrent access patterns
-- WebSocket broadcasting
+#### Frontend
+```bash
+cd frontend
+npm test
+```
+17 Vitest tests covering `computeMetrics`, `flattenEvents`, `buildTracesFromEvents`, `extractClassNameFromMethod` in [`traceUtils.js`](../frontend/src/services/traceUtils.js).
 
-**CI/CD**: GitHub Actions workflow runs tests automatically on push/PR
+**CI/CD**: GitHub Actions workflow runs both suites automatically on push/PR.
 
 ---
 
 ## 8. What's New (Latest Improvements)
 
-### ✅ Implemented
+### ✅ Implemented (Round 1)
 1. **✅ Stable span IDs**: `spanId` / `parentSpanId` (UUID-based) for reliable parent-child linkage
 2. **✅ Sampling**: Configurable "all", "slow", or percentage-based sampling
 3. **✅ Memory management**: TTL + LRU eviction with configurable limits
-4. **✅ CPU time tracking**: Real ThreadMXBean integration (not placeholder)
+4. **✅ CPU time tracking**: Real `ThreadMXBean` integration — cached as field, not per-call lookup
 5. **✅ Source metadata**: AspectJ SourceLocation for accurate file/line info
 6. **✅ Sensitive data redaction**: Pattern-based PII/credential detection
 7. **✅ Configurable WebSocket URL**: Frontend `.env` support
 8. **✅ CORS configuration**: Production-ready origin restrictions
 9. **✅ SQL tracing**: JDBC wrapper for query capture
 10. **✅ Safe replay endpoint**: Documentation-only (no arbitrary execution)
-11. **✅ Comprehensive tests**: Unit + integration + concurrency tests
+11. **✅ Comprehensive backend tests**: Unit + integration + concurrency tests
 12. **✅ CI/CD pipeline**: GitHub Actions for automated testing
+
+### ✅ Implemented (Round 2)
+13. **✅ WebSocket auto-reconnect**: Exponential backoff in `websocket.js` (1 s → 30 s cap)
+14. **✅ `TraceEvent` builder**: Lombok `@Builder` replaces fragile 22-argument constructors
+15. **✅ Frontend logic extraction**: `traceUtils.js` separates pure functions from `App.jsx`
+16. **✅ Frontend unit tests**: 17 Vitest tests for all utility functions
+17. **✅ WebSocket authentication**: `WebSocketAuthInterceptor` — opt-in shared-secret token guard
 
 ### 🔄 Future Extensions
 1. **Persistence**: Write events to DB/object storage for long-term retention
@@ -245,10 +262,12 @@ Tests cover:
 | `spanId` | UUID per method invocation; stable identifier for tree linkage |
 | `parentSpanId` | UUID of parent span; enables reliable parent-child relationships |
 | `TraceStack` | ThreadLocal deque mirroring traced call depth for parent resolution |
-| `TraceEvent` | Immutable record of one method invocation completion |
+| `TraceEvent` | Immutable record of one method invocation; built via Lombok `@Builder` |
 | Critical path | Longest cumulative duration path in collector's tree heuristic |
 | Flame graph (here) | Time-width stacked visualization; not identical to kernel flame graphs but same idea |
 | Sampling | Selective trace capture: "all", "slow" (>500ms), or percentage-based |
 | Redaction | Automatic removal of sensitive data (passwords, tokens, PII) from traces |
 | TTL | Time-to-live: automatic cleanup of traces older than configured duration |
 | LRU eviction | Least-recently-used removal when max trace count exceeded |
+| WS auth token | Shared secret checked by `WebSocketAuthInterceptor` on each upgrade handshake |
+| `traceUtils.js` | Pure JS module with `computeMetrics`, `flattenEvents`, `buildTracesFromEvents`, `extractClassNameFromMethod` |

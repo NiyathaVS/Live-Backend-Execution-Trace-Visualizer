@@ -91,6 +91,7 @@ flowchart TB
     subgraph Config
         TC[TraceConfiguration\nBeans: publisher, collector, ws handler]
         WSC[WebSocketConfig\nRegisters /ws/traces]
+        WAI[WebSocketAuthInterceptor\nHandshake token guard]
     end
 
     subgraph Tracing
@@ -115,6 +116,8 @@ flowchart TB
     TA --> IMTC
     TA --> TWH
     WSC --> TWH
+    WSC --> WAI
+    WAI --> TWH
     TRC --> IMTC
     UC --> TA
 ```
@@ -129,7 +132,7 @@ From socket to trees and views.
 flowchart LR
     WS[WebSocket\n/ws/traces] --> Parse[JSON parse TraceEvent]
     Parse --> Store["eventsByRequest\nmap requestId → events[]"]
-    Store --> Build[buildTracesFromEvents\nrebuild trees]
+    Store --> Build["buildTracesFromEvents\n(traceUtils.js)"]
     Build --> Views{Views}
 
     Views --> Tree[TraceTree\nD3 vertical tree]
@@ -157,7 +160,9 @@ flowchart TB
     F -->|"ws://localhost:8080/ws/traces"| B
 ```
 
-**Port reminder**: Backend defaults to **8080**. Frontend Vite is configured for **3000** in `frontend/vite.config.js` (README may mention 5173 elsewhere—follow Vite config + terminal output).
+**Port reminder**: Backend defaults to **8080**. Frontend Vite defaults to **5173** (see `frontend/vite.config.js`).
+
+**WebSocket auth**: the `WebSocketAuthInterceptor` sits between the client and `TraceWebSocketHandler`. With `auth-token: none` (default) it is a transparent pass-through. Set it to any non-`none` value and the interceptor returns HTTP 401 for upgrades missing or presenting the wrong `?token=` parameter.
 
 ---
 

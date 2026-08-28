@@ -49,6 +49,11 @@
   - Long alphanumeric/hex string detection
   - Configurable enable/disable via `trace.redaction.enabled`
 - **Configurable CORS origins** for WebSocket connections
+- **WebSocket shared-secret authentication** via `?token=` query parameter:
+  - Spring `HandshakeInterceptor` rejects unauthorized upgrades with HTTP 401
+  - Disabled by default (`auth-token: none`) — zero friction for local dev
+  - Enable in production: `trace.websocket.auth-token: your-secret`
+  - Frontend sends token via `VITE_WS_TOKEN` env variable
 - **Safe replay endpoint** (documentation-only, no arbitrary execution)
 
 ### ✅ Configuration
@@ -63,6 +68,7 @@ trace:
     enabled: true
   websocket:
     allowed-origins: "http://localhost:3000,http://localhost:5173"
+    auth-token: "none"  # Set to a secret string to require token auth
 ```
 
 ## Analysis & Insights
@@ -90,6 +96,7 @@ trace:
 
 ### ✅ Real-Time Streaming
 - **WebSocket connection** with configurable URL (via `.env`)
+- **Automatic reconnect** with exponential backoff (1 s → 2 s → 4 s, capped at 30 s)
 - **Live event ingestion** with pause/resume controls
 - **Request grouping** and automatic tree reconstruction
 - **Handles out-of-order events** gracefully
@@ -152,7 +159,7 @@ trace:
 ## Testing & Quality
 
 ### ✅ Comprehensive Test Suite
-- **Unit tests** for:
+- **Backend unit tests** for:
   - Call tree building with span IDs
   - Parent-child linkage
   - Multiple children handling
@@ -160,23 +167,29 @@ trace:
   - Error handling
   - CPU time preservation
   - Sampling logic
-  
+
 - **Diff logic tests**:
   - Added/removed method detection
   - Timing change detection
   - Edge case handling
-  
+
 - **Redaction tests**:
   - Password/token/PII field detection
   - Long string pattern matching
   - Case-insensitive matching
   - Non-string value preservation
-  
+
 - **Concurrency tests**:
   - Concurrent event addition
   - Mixed read/write operations
   - WebSocket broadcast under load
   - LRU eviction under concurrent access
+
+- **Frontend unit tests** (Vitest, 17 tests):
+  - `computeMetrics` — slow-path selection, node counting, maxExecution
+  - `flattenEvents` — DFS ordering, ROOT node skipping
+  - `extractClassNameFromMethod` — FQN parsing, edge cases
+  - `buildTracesFromEvents` — span linkage, orphan handling, multi-request
 
 ### ✅ CI/CD Pipeline
 - **GitHub Actions workflow**:
@@ -189,8 +202,8 @@ trace:
 ## Developer Experience
 
 ### ✅ Configuration Examples
-- **Frontend `.env.example`** with WebSocket URL configuration
-- **Backend `application.yml`** with all trace settings documented
+- **Frontend `.env.example`** with WebSocket URL and auth token configuration
+- **Backend `application.yml`** with all trace settings documented (including `auth-token`)
 - **Single source of truth** for port numbers and URLs
 
 ### ✅ Documentation
@@ -219,7 +232,6 @@ trace:
 - **Cross-service trace merging** (distributed tracing completion)
 - **Persistent trace storage** (currently in-memory only)
 - **ComparisonView.jsx** (exists but not wired into main UI)
-- **Advanced flame graph semantics** (inclusive width stacking)
 
 ### 🎯 Recommended Enhancements
 - Accessibility improvements (keyboard nav, focus states, color contrast)
@@ -248,7 +260,8 @@ Frontend runs on `http://localhost:5173` (Vite default)
 ### Configuration
 1. Copy `frontend/.env.example` to `frontend/.env`
 2. Adjust `VITE_WS_URL` if backend is not on localhost:8080
-3. Modify `instrumented-app/src/main/resources/application.yml` for trace settings
+3. (Optional) Set `VITE_WS_TOKEN` to match `trace.websocket.auth-token` in backend config
+4. Modify `instrumented-app/src/main/resources/application.yml` for trace settings
 
 ## Summary
 
@@ -256,7 +269,8 @@ This project provides a **production-ready, real-time execution tracing system**
 - ✅ Stable span IDs and accurate parent-child relationships
 - ✅ CPU time tracking and source metadata
 - ✅ Configurable sampling, retention, and redaction
-- ✅ Comprehensive test coverage
+- ✅ WebSocket auth (shared-secret, opt-in) and auto-reconnect
+- ✅ Comprehensive test coverage — backend JUnit + frontend Vitest (17 tests)
 - ✅ CI/CD pipeline
 - ✅ Rich interactive visualizations
 - ✅ Security-conscious design
