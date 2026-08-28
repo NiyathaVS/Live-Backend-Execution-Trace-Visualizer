@@ -380,24 +380,26 @@ This approach avoids child-before-parent insertion loss during streaming.
 - Timeline zoom + drag: implemented
 - Cross-request overlay timeline: implemented (MVP divergence heuristic)
 
-### Not Yet Implemented
+### Recently Implemented (v2 completion)
 
-- Distributed tracing across microservices (`X-Trace-Id` propagation)
-- Async context propagation (`@Async`, `CompletableFuture`, Reactor)
-- SQL query interception and N+1 detection
-- Persistence/export layer (JSON/SVG/PDF/share links)
-- Statistical aggregation dashboard (p95/p99, variance over many requests)
-- Full root-cause analyzer and anomaly detection
+- **Distributed tracing**: inbound `X-Trace-Id` / W3C `traceparent` parsing in `RequestIdFilter`; outbound propagation via `DistributedTraceInterceptor`
+- **Async context propagation**: `AsyncContextPropagator` + `traceAsyncExecutor` bean; `TraceContextPropagator` for `CompletableFuture`
+- **SQL tracing + N+1 detection**: JDBC wrappers + `SqlTraceListener`; N+1 heuristics in `TraceRootCauseAnalyzer`
+- **Persistence/export**: `TracePersistenceService` (file storage, share links, retention); export endpoints for JSON/SVG/PDF
+- **Metrics dashboard**: `GET /traces/metrics/dashboard` with p50/p95/p99, variance, error rate; `MetricsDashboard` UI component
+- **Root-cause + anomalies**: extended `TraceAnalysisReport` with `rootCauseHints`, `nPlusOneWarnings`, `anomalies`
+- **Stable span linkage**: `spanId`/`parentSpanId` in backend + frontend tree builder
+- **Backend-driven compare diff**: UI fetches `GET /traces/diff` instead of client-side diff
 
 ---
 
 ## 9) Suggested Next Engineering Steps
 
-1. Introduce stable `spanId`/`parentSpanId` in `TraceEvent` and tree builders.
-2. Move compare analytics to backend API consumption in UI (single source of truth).
-3. Add persisted trace storage layer and retention strategy.
-4. Build method-level aggregate metrics endpoint (avg, p95/p99, count, error rate).
-5. Add distributed trace propagation via HTTP headers.
+1. Add Reactor/WebFlux `Context` propagation for fully reactive stacks.
+2. Replace file-based persistence with object storage / DB for multi-instance deployments.
+3. Add OpenTelemetry exporter bridge for interoperability with standard APM tools.
+4. Harden PDF export (rich layout) and add trace search/indexing over persisted archives.
+5. Add auth on share links and export endpoints for production hardening.
 
 ---
 
