@@ -53,12 +53,14 @@ class TraceSearchServiceTests {
     }
 
     private void addMethodEvent(String requestId, String method, long ms, String status) {
-        TraceEvent event = new TraceEvent(
-                requestId, 1, java.time.LocalDateTime.now(), method,
-                null, null, ms, "ROOT", null, 0,
-                status, null, null, null, "main", 0, "RUNNABLE",
-                SqlTraceListener.EVENT_TYPE_METHOD, null, false,
-                java.util.UUID.randomUUID().toString(), null);
+        TraceEvent event = TraceEvent.builder()
+                .requestId(requestId).threadId(1L).timestamp(java.time.LocalDateTime.now())
+                .method(method).executionTimeMs(ms)
+                .parentMethod("ROOT").sourceLine(0).status(status)
+                .threadName("main").threadCpuTimeMs(0L).threadState("RUNNABLE")
+                .eventType(SqlTraceListener.EVENT_TYPE_METHOD)
+                .spanId(java.util.UUID.randomUUID().toString())
+                .build();
         collector.addEvent(event);
     }
 }

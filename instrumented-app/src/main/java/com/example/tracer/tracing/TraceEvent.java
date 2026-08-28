@@ -1,12 +1,19 @@
 package com.example.tracer.tracing;
 
+import lombok.Builder;
+import lombok.Getter;
+
 import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.UUID;
 
+@Getter
+@Builder
 public class TraceEvent {
 
-    private final String eventId;
+    @Builder.Default
+    private final String eventId = UUID.randomUUID().toString();
+
     private final String spanId;
     private final String parentSpanId;
     private final String requestId;
@@ -26,128 +33,43 @@ public class TraceEvent {
     private final String threadName;
     private final long threadCpuTimeMs;
     private final String threadState;
-    private final String eventType;
+
+    @Builder.Default
+    private final String eventType = SqlTraceListener.EVENT_TYPE_METHOD;
+
     private final String sql;
     private final boolean slowQuery;
 
-    public TraceEvent(String requestId,
-                      long threadId,
-                      LocalDateTime timestamp,
-                      String method,
-                      Map<String, Object> params,
-                      Object returnValue,
-                      long executionTimeMs,
-                      String parentMethod,
-                      String sourceFile,
-                      int sourceLine,
-                      String status,
-                      String errorType,
-                      String errorMessage,
-                      String errorStackTrace,
-                      String threadName,
-                      long threadCpuTimeMs,
-                      String threadState) {
-        this(requestId, threadId, timestamp, method, params, returnValue, executionTimeMs,
-                parentMethod, sourceFile, sourceLine, status, errorType, errorMessage,
-                errorStackTrace, threadName, threadCpuTimeMs, threadState,
-                SqlTraceListener.EVENT_TYPE_METHOD, null, false, null, null);
+    /**
+     * Returns a copy of this event with the given params and returnValue replaced.
+     * Used by {@link SensitiveDataRedactor} to produce a redacted copy without
+     * mutating the original.
+     */
+    public TraceEvent withRedacted(Map<String, Object> redactedParams, Object redactedReturn) {
+        return TraceEvent.builder()
+                .eventId(this.eventId)
+                .spanId(this.spanId)
+                .parentSpanId(this.parentSpanId)
+                .requestId(this.requestId)
+                .threadId(this.threadId)
+                .timestamp(this.timestamp)
+                .method(this.method)
+                .params(redactedParams)
+                .returnValue(redactedReturn)
+                .executionTimeMs(this.executionTimeMs)
+                .parentMethod(this.parentMethod)
+                .sourceFile(this.sourceFile)
+                .sourceLine(this.sourceLine)
+                .status(this.status)
+                .errorType(this.errorType)
+                .errorMessage(this.errorMessage)
+                .errorStackTrace(this.errorStackTrace)
+                .threadName(this.threadName)
+                .threadCpuTimeMs(this.threadCpuTimeMs)
+                .threadState(this.threadState)
+                .eventType(this.eventType)
+                .sql(this.sql)
+                .slowQuery(this.slowQuery)
+                .build();
     }
-
-    public TraceEvent(String requestId,
-                      long threadId,
-                      LocalDateTime timestamp,
-                      String method,
-                      Map<String, Object> params,
-                      Object returnValue,
-                      long executionTimeMs,
-                      String parentMethod,
-                      String sourceFile,
-                      int sourceLine,
-                      String status,
-                      String errorType,
-                      String errorMessage,
-                      String errorStackTrace,
-                      String threadName,
-                      long threadCpuTimeMs,
-                      String threadState,
-                      String eventType,
-                      String sql,
-                      boolean slowQuery) {
-        this(requestId, threadId, timestamp, method, params, returnValue, executionTimeMs,
-                parentMethod, sourceFile, sourceLine, status, errorType, errorMessage,
-                errorStackTrace, threadName, threadCpuTimeMs, threadState,
-                eventType, sql, slowQuery, null, null);
-    }
-
-    public TraceEvent(String requestId,
-                      long threadId,
-                      LocalDateTime timestamp,
-                      String method,
-                      Map<String, Object> params,
-                      Object returnValue,
-                      long executionTimeMs,
-                      String parentMethod,
-                      String sourceFile,
-                      int sourceLine,
-                      String status,
-                      String errorType,
-                      String errorMessage,
-                      String errorStackTrace,
-                      String threadName,
-                      long threadCpuTimeMs,
-                      String threadState,
-                      String eventType,
-                      String sql,
-                      boolean slowQuery,
-                      String spanId,
-                      String parentSpanId) {
-
-        this.spanId = spanId != null ? spanId : UUID.randomUUID().toString();
-        this.parentSpanId = parentSpanId;
-        this.eventId = UUID.randomUUID().toString();
-        this.requestId = requestId;
-        this.threadId = threadId;
-        this.timestamp = timestamp;
-        this.method = method;
-        this.params = params;
-        this.returnValue = returnValue;
-        this.executionTimeMs = executionTimeMs;
-        this.parentMethod = parentMethod;
-        this.sourceFile = sourceFile;
-        this.sourceLine = sourceLine;
-        this.status = status;
-        this.errorType = errorType;
-        this.errorMessage = errorMessage;
-        this.errorStackTrace = errorStackTrace;
-        this.threadName = threadName;
-        this.threadCpuTimeMs = threadCpuTimeMs;
-        this.threadState = threadState;
-        this.eventType = eventType != null ? eventType : SqlTraceListener.EVENT_TYPE_METHOD;
-        this.sql = sql;
-        this.slowQuery = slowQuery;
-    }
-
-    public String getEventId() { return eventId; }
-    public String getSpanId() { return spanId; }
-    public String getParentSpanId() { return parentSpanId; }
-    public String getRequestId() { return requestId; }
-    public long getThreadId() { return threadId; }
-    public LocalDateTime getTimestamp() { return timestamp; }
-    public String getMethod() { return method; }
-    public Map<String, Object> getParams() { return params; }
-    public Object getReturnValue() { return returnValue; }
-    public long getExecutionTimeMs() { return executionTimeMs; }
-    public String getParentMethod() { return parentMethod; }
-    public String getSourceFile() { return sourceFile; }
-    public int getSourceLine() { return sourceLine; }
-    public String getStatus() { return status; }
-    public String getErrorType() { return errorType; }
-    public String getErrorMessage() { return errorMessage; }
-    public String getErrorStackTrace() { return errorStackTrace; }
-    public String getThreadName() { return threadName; }
-    public long getThreadCpuTimeMs() { return threadCpuTimeMs; }
-    public String getThreadState() { return threadState; }
-    public String getEventType() { return eventType; }
-    public String getSql() { return sql; }
-    public boolean isSlowQuery() { return slowQuery; }
 }

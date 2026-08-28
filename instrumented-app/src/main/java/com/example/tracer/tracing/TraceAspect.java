@@ -24,9 +24,10 @@ public class TraceAspect {
 
     private final TraceEventPublisher eventPublisher;
     private final InMemoryTraceCollector collector;
+    private final ThreadMXBean threadMXBean = ManagementFactory.getThreadMXBean();
     @Autowired(required = false)
     private TraceWebSocketHandler wsHandler;
-    
+
     @Value("${trace.redaction.enabled:true}")
     private boolean redactionEnabled;
 
@@ -64,8 +65,7 @@ public class TraceAspect {
         long duration;
         Throwable capturedError = null;
         
-        // Capture CPU time using ThreadMXBean
-        ThreadMXBean threadMXBean = ManagementFactory.getThreadMXBean();
+        // Capture CPU time using the cached ThreadMXBean
         long startCpuTime = -1;
         try {
             if (threadMXBean.isCurrentThreadCpuTimeSupported() && threadMXBean.isThreadCpuTimeEnabled()) {
@@ -131,30 +131,28 @@ public class TraceAspect {
                 }
             }
 
-            TraceEvent event = new TraceEvent(
-                MDC.get(RequestIdFilter.REQUEST_ID_KEY),
-                Thread.currentThread().getId(),
-                LocalDateTime.now(),
-                methodName,
-                params,
-                returnValue,
-                duration,
-                parentMethod,
-                sourceFile,
-                sourceLine,
-                status,
-                errorType,
-                errorMessage,
-                errorStackTrace,
-                Thread.currentThread().getName(),
-                cpuTimeDelta,
-                Thread.currentThread().getState().name(),
-                "METHOD",
-                null,
-                false,
-                context.getSpanId(),
-                context.getParentSpanId()
-            );
+            TraceEvent event = TraceEvent.builder()
+                .requestId(MDC.get(RequestIdFilter.REQUEST_ID_KEY))
+                .threadId(Thread.currentThread().getId())
+                .timestamp(LocalDateTime.now())
+                .method(methodName)
+                .params(params)
+                .returnValue(returnValue)
+                .executionTimeMs(duration)
+                .parentMethod(parentMethod)
+                .sourceFile(sourceFile)
+                .sourceLine(sourceLine)
+                .status(status)
+                .errorType(errorType)
+                .errorMessage(errorMessage)
+                .errorStackTrace(errorStackTrace)
+                .threadName(Thread.currentThread().getName())
+                .threadCpuTimeMs(cpuTimeDelta)
+                .threadState(Thread.currentThread().getState().name())
+                .eventType("METHOD")
+                .spanId(context.getSpanId())
+                .parentSpanId(context.getParentSpanId())
+                .build();
             
             // Apply redaction if enabled
             TraceEvent finalEvent = redactionEnabled ? SensitiveDataRedactor.redactEvent(event) : event;

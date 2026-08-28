@@ -105,35 +105,9 @@ public class SensitiveDataRedactor {
      */
     public static TraceEvent redactEvent(TraceEvent event) {
         Map<String, Object> redactedParams = redactParams(event.getParams());
-        Object redactedReturn = event.getReturnValue() instanceof String ? 
-            redactValue((String) event.getReturnValue()) : 
-            event.getReturnValue();
-        
-        // Create new event with redacted data (using constructor)
-        // Note: This is simplified; in production you might want a builder
-        return new TraceEvent(
-            event.getRequestId(),
-            event.getThreadId(),
-            event.getTimestamp(),
-            event.getMethod(),
-            redactedParams,
-            redactedReturn,
-            event.getExecutionTimeMs(),
-            event.getParentMethod(),
-            event.getSourceFile(),
-            event.getSourceLine(),
-            event.getStatus(),
-            event.getErrorType(),
-            event.getErrorMessage(),
-            event.getErrorStackTrace(),
-            event.getThreadName(),
-            event.getThreadCpuTimeMs(),
-            event.getThreadState(),
-            event.getEventType(),
-            event.getSql(),
-            event.isSlowQuery(),
-            event.getSpanId(),
-            event.getParentSpanId()
-        );
+        Object redactedReturn = event.getReturnValue() instanceof String
+                ? redactValue((String) event.getReturnValue())
+                : event.getReturnValue();
+        return event.withRedacted(redactedParams, redactedReturn);
     }
 }

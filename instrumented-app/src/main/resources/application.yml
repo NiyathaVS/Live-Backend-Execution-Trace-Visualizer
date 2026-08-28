@@ -24,6 +24,12 @@ trace:
     # For production, set this to your frontend domain(s)
     # Example: "https://myapp.com,https://api.myapp.com"
     allowed-origins: "http://localhost:3000,http://localhost:5173"
+    # Shared secret for WebSocket authentication.
+    # "none" (default) disables auth — safe for local development.
+    # In production: set to a strong random string here or via the
+    # TRACE_WS_AUTH_TOKEN environment variable.
+    # The frontend must connect with: ws://host/ws/traces?token=<secret>
+    auth-token: "none"
   alerts:
     slow-request-ms: 1000
     max-error-nodes: 0

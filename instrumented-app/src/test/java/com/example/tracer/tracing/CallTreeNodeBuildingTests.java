@@ -89,13 +89,13 @@ class CallTreeNodeBuildingTests {
     @Test
     @DisplayName("Slow path detection")
     void testSlowPathDetection() {
-        TraceEvent slowEvent = new TraceEvent(
-            "requestId1", 1L, LocalDateTime.now(),
-            "com.example.Service.slowMethod()",
-            new HashMap<>(), null, 500L, null,
-            "Service.java", 10, "SUCCESS",
-            null, null, null, "main", 100L, "RUNNABLE"
-        );
+        TraceEvent slowEvent = TraceEvent.builder()
+            .requestId("requestId1").threadId(1L).timestamp(LocalDateTime.now())
+            .method("com.example.Service.slowMethod()")
+            .params(new HashMap<>()).executionTimeMs(500L)
+            .sourceFile("Service.java").sourceLine(10)
+            .status("SUCCESS").threadName("main").threadCpuTimeMs(100L).threadState("RUNNABLE")
+            .build();
         
         collector.addEvent(slowEvent);
         
@@ -107,14 +107,14 @@ class CallTreeNodeBuildingTests {
     @Test
     @DisplayName("Error handling")
     void testErrorHandling() {
-        TraceEvent errorEvent = new TraceEvent(
-            "requestId1", 1L, LocalDateTime.now(),
-            "com.example.Service.failingMethod()",
-            new HashMap<>(), null, 50L, null,
-            "Service.java", 10, "ERROR",
-            "NullPointerException", "Something was null", "at line 10...",
-            "main", 10L, "RUNNABLE"
-        );
+        TraceEvent errorEvent = TraceEvent.builder()
+            .requestId("requestId1").threadId(1L).timestamp(LocalDateTime.now())
+            .method("com.example.Service.failingMethod()")
+            .params(new HashMap<>()).executionTimeMs(50L)
+            .sourceFile("Service.java").sourceLine(10).status("ERROR")
+            .errorType("NullPointerException").errorMessage("Something was null").errorStackTrace("at line 10...")
+            .threadName("main").threadCpuTimeMs(10L).threadState("RUNNABLE")
+            .build();
         
         collector.addEvent(errorEvent);
         
@@ -147,13 +147,13 @@ class CallTreeNodeBuildingTests {
     @Test
     @DisplayName("CPU time is preserved")
     void testCpuTimePreservation() {
-        TraceEvent event = new TraceEvent(
-            "requestId1", 1L, LocalDateTime.now(),
-            "com.example.Service.method()",
-            new HashMap<>(), null, 100L, null,
-            "Service.java", 10, "SUCCESS",
-            null, null, null, "main", 45L, "RUNNABLE"
-        );
+        TraceEvent event = TraceEvent.builder()
+            .requestId("requestId1").threadId(1L).timestamp(LocalDateTime.now())
+            .method("com.example.Service.method()")
+            .params(new HashMap<>()).executionTimeMs(100L)
+            .sourceFile("Service.java").sourceLine(10).status("SUCCESS")
+            .threadName("main").threadCpuTimeMs(45L).threadState("RUNNABLE")
+            .build();
         
         collector.addEvent(event);
         
@@ -181,22 +181,16 @@ class CallTreeNodeBuildingTests {
     }
 
     private TraceEvent createEvent(String requestId, String method, String spanId, String parentSpanId) {
-        return new TraceEvent(
-            requestId, 1L, LocalDateTime.now(),
-            method, new HashMap<>(), null, 50L, null,
-            "Service.java", 10, "SUCCESS",
-            null, null, null, "main", 10L, "RUNNABLE",
-            "METHOD", null, false, spanId, parentSpanId
-        );
+        return TraceEvent.builder()
+            .requestId(requestId).threadId(1L).timestamp(LocalDateTime.now())
+            .method(method).params(new HashMap<>()).executionTimeMs(50L)
+            .sourceFile("Service.java").sourceLine(10).status("SUCCESS")
+            .threadName("main").threadCpuTimeMs(10L).threadState("RUNNABLE")
+            .eventType("METHOD").spanId(spanId).parentSpanId(parentSpanId)
+            .build();
     }
 
     private TraceEvent createEventWithSpanIds(String requestId, String method, String spanId, String parentSpanId) {
-        return new TraceEvent(
-            requestId, 1L, LocalDateTime.now(),
-            method, new HashMap<>(), null, 50L, null,
-            "Service.java", 10, "SUCCESS",
-            null, null, null, "main", 10L, "RUNNABLE",
-            "METHOD", null, false, spanId, parentSpanId
-        );
+        return createEvent(requestId, method, spanId, parentSpanId);
     }
 }

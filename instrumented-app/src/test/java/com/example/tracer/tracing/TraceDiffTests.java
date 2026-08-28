@@ -143,25 +143,17 @@ class TraceDiffTests {
     }
 
     private void addEvent(String requestId, String method, long executionTime) {
-        TraceEvent event = new TraceEvent(
-            requestId,
-            Thread.currentThread().getId(),
-            LocalDateTime.now(),
-            method,
-            new HashMap<>(),
-            null,
-            executionTime,
-            null,
-            "Service.java",
-            10,
-            "SUCCESS",
-            null,
-            null,
-            null,
-            "main",
-            10L,
-            "RUNNABLE"
-        );
+        TraceEvent event = TraceEvent.builder()
+            .requestId(requestId)
+            .threadId(Thread.currentThread().getId())
+            .timestamp(LocalDateTime.now())
+            .method(method)
+            .params(new HashMap<>())
+            .executionTimeMs(executionTime)
+            .sourceFile("Service.java").sourceLine(10)
+            .status("SUCCESS")
+            .threadName("main").threadCpuTimeMs(10L).threadState("RUNNABLE")
+            .build();
         collector.addEvent(event);
     }
 }

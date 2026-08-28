@@ -130,25 +130,15 @@ class SensitiveDataRedactorTests {
         params.put("password", "secret123");
         params.put("apiKey", "sk_live_1234567890");
 
-        TraceEvent event = new TraceEvent(
-            "req-123",
-            1L,
-            LocalDateTime.now(),
-            "com.example.Service.login()",
-            params,
-            "aGVsbG8gd29ybGQgdGhpcyBpcyBhIGxvbmcgYmFzZTY0IGVuY29kZWQgc3RyaW5n",
-            100L,
-            null,
-            "Service.java",
-            10,
-            "SUCCESS",
-            null,
-            null,
-            null,
-            "main",
-            10L,
-            "RUNNABLE"
-        );
+        TraceEvent event = TraceEvent.builder()
+            .requestId("req-123").threadId(1L).timestamp(LocalDateTime.now())
+            .method("com.example.Service.login()")
+            .params(params)
+            .returnValue("aGVsbG8gd29ybGQgdGhpcyBpcyBhIGxvbmcgYmFzZTY0IGVuY29kZWQgc3RyaW5n")
+            .executionTimeMs(100L)
+            .sourceFile("Service.java").sourceLine(10).status("SUCCESS")
+            .threadName("main").threadCpuTimeMs(10L).threadState("RUNNABLE")
+            .build();
 
         TraceEvent redacted = SensitiveDataRedactor.redactEvent(event);
 

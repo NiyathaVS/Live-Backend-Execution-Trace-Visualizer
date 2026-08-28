@@ -61,30 +61,27 @@ public class SqlTraceListener {
 
         String displayName = "SQL: " + truncateSql(sql, 72);
 
-        TraceEvent event = new TraceEvent(
-                requestId,
-                Thread.currentThread().getId(),
-                LocalDateTime.now(),
-                displayName,
-                params,
-                null,
-                durationMs,
-                parentMethod,
-                "jdbc",
-                -1,
-                status,
-                slowQuery ? "SlowQuery" : null,
-                errorMessage,
-                null,
-                Thread.currentThread().getName(),
-                0L,
-                Thread.currentThread().getState().name(),
-                EVENT_TYPE_SQL,
-                sql,
-                slowQuery,
-                sqlSpanId,
-                parentSpanId
-        );
+        TraceEvent event = TraceEvent.builder()
+                .requestId(requestId)
+                .threadId(Thread.currentThread().getId())
+                .timestamp(LocalDateTime.now())
+                .method(displayName)
+                .params(params)
+                .executionTimeMs(durationMs)
+                .parentMethod(parentMethod)
+                .sourceFile("jdbc")
+                .sourceLine(-1)
+                .status(status)
+                .errorType(slowQuery ? "SlowQuery" : null)
+                .errorMessage(errorMessage)
+                .threadName(Thread.currentThread().getName())
+                .threadState(Thread.currentThread().getState().name())
+                .eventType(EVENT_TYPE_SQL)
+                .sql(sql)
+                .slowQuery(slowQuery)
+                .spanId(sqlSpanId)
+                .parentSpanId(parentSpanId)
+                .build();
 
         eventPublisher.publish(event);
         collector.addEvent(event);

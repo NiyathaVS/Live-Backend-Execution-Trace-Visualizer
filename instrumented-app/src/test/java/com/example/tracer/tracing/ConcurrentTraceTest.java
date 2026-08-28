@@ -42,25 +42,19 @@ public class ConcurrentTraceTest {
             executor.submit(() -> {
                 try {
                     for (int i = 0; i < eventsPerThread; i++) {
-                        TraceEvent event = new TraceEvent(
-                            "req-" + threadId,
-                            Thread.currentThread().getId(),
-                            LocalDateTime.now(),
-                            "method" + i,
-                            new HashMap<>(),
-                            null,
-                            10L + i,
-                            "parentMethod",
-                            "Test.java",
-                            i,
-                            "SUCCESS",
-                            null,
-                            null,
-                            null,
-                            Thread.currentThread().getName(),
-                            0L,
-                            Thread.currentThread().getState().name()
-                        );
+                        TraceEvent event = TraceEvent.builder()
+                            .requestId("req-" + threadId)
+                            .threadId(Thread.currentThread().getId())
+                            .timestamp(LocalDateTime.now())
+                            .method("method" + i)
+                            .params(new HashMap<>())
+                            .executionTimeMs(10L + i)
+                            .parentMethod("parentMethod")
+                            .sourceFile("Test.java").sourceLine(i)
+                            .status("SUCCESS")
+                            .threadName(Thread.currentThread().getName())
+                            .threadState(Thread.currentThread().getState().name())
+                            .build();
                         collector.addEvent(event);
                     }
                 } finally {
@@ -98,25 +92,22 @@ public class ConcurrentTraceTest {
                 try {
                     startLatch.await();
                     for (int i = 0; i < eventCount; i++) {
-                        TraceEvent event = new TraceEvent(
-                            requestId,
-                            Thread.currentThread().getId(),
-                            LocalDateTime.now(),
-                            "method" + i,
-                            new HashMap<>(),
-                            null,
-                            20L + (i % 200),
-                            "parentMethod",
-                            "Test.java",
-                            i,
-                            i % 10 == 0 ? "ERROR" : "SUCCESS",
-                            i % 10 == 0 ? "TestException" : null,
-                            i % 10 == 0 ? "Test error message" : null,
-                            i % 10 == 0 ? "at Test.method()" : null,
-                            Thread.currentThread().getName(),
-                            0L,
-                            Thread.currentThread().getState().name()
-                        );
+                        TraceEvent event = TraceEvent.builder()
+                            .requestId(requestId)
+                            .threadId(Thread.currentThread().getId())
+                            .timestamp(LocalDateTime.now())
+                            .method("method" + i)
+                            .params(new HashMap<>())
+                            .executionTimeMs(20L + (i % 200))
+                            .parentMethod("parentMethod")
+                            .sourceFile("Test.java").sourceLine(i)
+                            .status(i % 10 == 0 ? "ERROR" : "SUCCESS")
+                            .errorType(i % 10 == 0 ? "TestException" : null)
+                            .errorMessage(i % 10 == 0 ? "Test error message" : null)
+                            .errorStackTrace(i % 10 == 0 ? "at Test.method()" : null)
+                            .threadName(Thread.currentThread().getName())
+                            .threadState(Thread.currentThread().getState().name())
+                            .build();
                         collector.addEvent(event);
                     }
                 } catch (InterruptedException e) {
@@ -188,25 +179,19 @@ public class ConcurrentTraceTest {
             executor.submit(() -> {
                 try {
                     for (int i = 0; i < numEvents; i++) {
-                        TraceEvent event = new TraceEvent(
-                            "req-" + threadId,
-                            Thread.currentThread().getId(),
-                            LocalDateTime.now(),
-                            "method" + i,
-                            new HashMap<>(),
-                            null,
-                            5L + i,
-                            "parentMethod",
-                            "Test.java",
-                            i,
-                            "SUCCESS",
-                            null,
-                            null,
-                            null,
-                            Thread.currentThread().getName(),
-                            0L,
-                            Thread.currentThread().getState().name()
-                        );
+                        TraceEvent event = TraceEvent.builder()
+                            .requestId("req-" + threadId)
+                            .threadId(Thread.currentThread().getId())
+                            .timestamp(LocalDateTime.now())
+                            .method("method" + i)
+                            .params(new HashMap<>())
+                            .executionTimeMs(5L + i)
+                            .parentMethod("parentMethod")
+                            .sourceFile("Test.java").sourceLine(i)
+                            .status("SUCCESS")
+                            .threadName(Thread.currentThread().getName())
+                            .threadState(Thread.currentThread().getState().name())
+                            .build();
                         wsHandler.broadcastEvent(event);
                     }
                 } finally {
@@ -244,25 +229,18 @@ public class ConcurrentTraceTest {
                 try {
                     for (int i = 0; i < 50; i++) {
                         String requestId = "req-" + threadId + "-" + i;
-                        TraceEvent event = new TraceEvent(
-                            requestId,
-                            Thread.currentThread().getId(),
-                            LocalDateTime.now(),
-                            "method",
-                            new HashMap<>(),
-                            null,
-                            10L,
-                            null,
-                            "Test.java",
-                            1,
-                            "SUCCESS",
-                            null,
-                            null,
-                            null,
-                            Thread.currentThread().getName(),
-                            0L,
-                            Thread.currentThread().getState().name()
-                        );
+                        TraceEvent event = TraceEvent.builder()
+                            .requestId(requestId)
+                            .threadId(Thread.currentThread().getId())
+                            .timestamp(LocalDateTime.now())
+                            .method("method")
+                            .params(new HashMap<>())
+                            .executionTimeMs(10L)
+                            .sourceFile("Test.java").sourceLine(1)
+                            .status("SUCCESS")
+                            .threadName(Thread.currentThread().getName())
+                            .threadState(Thread.currentThread().getState().name())
+                            .build();
                         boundedCollector.addEvent(event);
                     }
                 } finally {
@@ -295,25 +273,19 @@ public class ConcurrentTraceTest {
             executor.submit(() -> {
                 try {
                     for (int i = 0; i < 30; i++) {
-                        TraceEvent event = new TraceEvent(
-                            requestId,
-                            Thread.currentThread().getId(),
-                            LocalDateTime.now(),
-                            "method" + i,
-                            new HashMap<>(),
-                            null,
-                            15L + i,
-                            "parentMethod",
-                            "Test.java",
-                            i,
-                            "SUCCESS",
-                            null,
-                            null,
-                            null,
-                            Thread.currentThread().getName(),
-                            0L,
-                            Thread.currentThread().getState().name()
-                        );
+                        TraceEvent event = TraceEvent.builder()
+                            .requestId(requestId)
+                            .threadId(Thread.currentThread().getId())
+                            .timestamp(LocalDateTime.now())
+                            .method("method" + i)
+                            .params(new HashMap<>())
+                            .executionTimeMs(15L + i)
+                            .parentMethod("parentMethod")
+                            .sourceFile("Test.java").sourceLine(i)
+                            .status("SUCCESS")
+                            .threadName(Thread.currentThread().getName())
+                            .threadState(Thread.currentThread().getState().name())
+                            .build();
                         collector.addEvent(event);
                         Thread.sleep(1);
                     }

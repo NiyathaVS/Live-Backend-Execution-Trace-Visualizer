@@ -65,56 +65,30 @@ class TraceMetricsAndNPlusOneTests {
     }
 
     private void addMethodEvent(String requestId, String method, String spanId, String parentSpanId, long ms) {
-        collector.addEvent(new TraceEvent(
-                requestId,
-                1L,
-                LocalDateTime.now(),
-                method,
-                Map.of(),
-                "ok",
-                ms,
-                null,
-                "Service.java",
-                10,
-                "SUCCESS",
-                null,
-                null,
-                null,
-                "main",
-                1L,
-                "RUNNABLE",
-                SqlTraceListener.EVENT_TYPE_METHOD,
-                null,
-                false,
-                spanId != null ? spanId : UUID.randomUUID().toString(),
-                parentSpanId
-        ));
+        collector.addEvent(TraceEvent.builder()
+                .requestId(requestId).threadId(1L).timestamp(LocalDateTime.now())
+                .method(method).params(Map.of()).returnValue("ok")
+                .executionTimeMs(ms)
+                .sourceFile("Service.java").sourceLine(10).status("SUCCESS")
+                .threadName("main").threadCpuTimeMs(1L).threadState("RUNNABLE")
+                .eventType(SqlTraceListener.EVENT_TYPE_METHOD)
+                .spanId(spanId != null ? spanId : UUID.randomUUID().toString())
+                .parentSpanId(parentSpanId)
+                .build());
     }
 
     private void addSqlEvent(String requestId, String sql, String parentSpanId) {
-        collector.addEvent(new TraceEvent(
-                requestId,
-                1L,
-                LocalDateTime.now(),
-                "SQL: " + sql,
-                new HashMap<>(),
-                null,
-                20,
-                "com.example.Service.load(..)",
-                "jdbc",
-                -1,
-                "SUCCESS",
-                null,
-                null,
-                null,
-                "main",
-                0L,
-                "RUNNABLE",
-                SqlTraceListener.EVENT_TYPE_SQL,
-                sql,
-                false,
-                UUID.randomUUID().toString(),
-                parentSpanId
-        ));
+        collector.addEvent(TraceEvent.builder()
+                .requestId(requestId).threadId(1L).timestamp(LocalDateTime.now())
+                .method("SQL: " + sql).params(new HashMap<>())
+                .executionTimeMs(20L)
+                .parentMethod("com.example.Service.load(..)")
+                .sourceFile("jdbc").sourceLine(-1).status("SUCCESS")
+                .threadName("main").threadState("RUNNABLE")
+                .eventType(SqlTraceListener.EVENT_TYPE_SQL)
+                .sql(sql)
+                .spanId(UUID.randomUUID().toString())
+                .parentSpanId(parentSpanId)
+                .build());
     }
 }
