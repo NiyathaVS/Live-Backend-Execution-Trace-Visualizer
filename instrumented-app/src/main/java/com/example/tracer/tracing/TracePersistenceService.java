@@ -94,12 +94,18 @@ public class TracePersistenceService {
     }
 
     public void purgeExpired() throws IOException {
-        long cutoff = System.currentTimeMillis() - retentionMillis;
+        long cutoffMs = System.currentTimeMillis() - retentionMillis;
         try (Stream<Path> files = Files.list(storageDir)) {
             files.filter(p -> p.toString().endsWith(".json"))
                     .forEach(p -> {
                         try {
-                            if (Files.getLastModifiedTime(p).toMillis() < cutoff) {
+                            // Use the persistedAt timestamp recorded in the payload
+                            // rather than the file's last-modified time, which can be
+                            // reset by backup tools or filesystem operations.
+                            PersistedTracePayload payload =
+                                    objectMapper.readValue(p.toFile(), PersistedTracePayload.class);
+                            long persistedMs = Instant.parse(payload.persistedAt()).toEpochMilli();
+                            if (persistedMs < cutoffMs) {
                                 Files.deleteIfExists(p);
                             }
                         } catch (IOException ignored) {

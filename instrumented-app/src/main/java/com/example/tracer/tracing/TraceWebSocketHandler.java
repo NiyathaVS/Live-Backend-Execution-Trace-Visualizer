@@ -68,12 +68,10 @@ public class TraceWebSocketHandler extends TextWebSocketHandler {
         String requestId = event.getRequestId();
         try {
             String json = mapper.writeValueAsString(event);
-            
-            // Copy session set to avoid concurrent modification during iteration
-            Set<WebSocketSession> sessionsCopy = ConcurrentHashMap.newKeySet();
-            sessionsCopy.addAll(sessions);
-            
-            for (WebSocketSession session : sessionsCopy) {
+
+            // ConcurrentHashMap's key set is safe to iterate directly while
+            // other threads add/remove entries — no defensive copy needed.
+            for (WebSocketSession session : sessions) {
                 if (session.isOpen()) {
                     try {
                         session.sendMessage(new TextMessage(json));

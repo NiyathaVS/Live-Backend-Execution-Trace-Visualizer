@@ -17,7 +17,7 @@ class CallTreeNodeBuildingTests {
 
     @BeforeEach
     void setUp() {
-        collector = new InMemoryTraceCollector(100, 3600, "all");
+        collector = new InMemoryTraceCollector(100, 3600, "all", 100, 200);
     }
 
     @Test
@@ -127,7 +127,7 @@ class CallTreeNodeBuildingTests {
     @Test
     @DisplayName("Sampling filters by percentage")
     void testSamplingPercentage() {
-        InMemoryTraceCollector sampledCollector = new InMemoryTraceCollector(100, 3600, "10");
+        InMemoryTraceCollector sampledCollector = new InMemoryTraceCollector(100, 3600, "10", 100, 200);
         
         // Add 100 events with different execution times
         // ~10 should be sampled on average

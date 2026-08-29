@@ -13,12 +13,18 @@ public class TraceConfiguration {
 
     @Value("${trace.max-traces:1000}")
     private int maxTraces;
-    
+
     @Value("${trace.ttl-seconds:3600}")
     private long ttlSeconds;
-    
+
     @Value("${trace.sampling:all}")
     private String sampling;
+
+    @Value("${trace.slow-threshold-ms:100}")
+    private long slowThresholdMs;
+
+    @Value("${trace.sql.slow-threshold-ms:200}")
+    private long slowSqlThresholdMs;
 
     @Bean
     public TraceEventPublisher traceEventPublisher() {
@@ -28,7 +34,7 @@ public class TraceConfiguration {
 
     @Bean
     public InMemoryTraceCollector inMemoryTraceCollector() {
-        return new InMemoryTraceCollector(maxTraces, ttlSeconds, sampling);
+        return new InMemoryTraceCollector(maxTraces, ttlSeconds, sampling, slowThresholdMs, slowSqlThresholdMs);
     }
 
     @Bean

@@ -10,8 +10,12 @@ trace:
   ttl-seconds: 3600
   # Sampling configuration: 'all', 'slow' (>500ms), or percentage (e.g., '10' for 10%)
   sampling: all
+  # A single method/span taking longer than this is flagged slowPath=true.
+  # For a synchronous HTTP service, 100ms per-span is a reasonable signal.
+  slow-threshold-ms: 100
   sql:
-    slow-threshold-ms: 500
+    # A SQL query taking longer than this is flagged slowQuery=true.
+    slow-threshold-ms: 200
   persistence:
     dir: ./trace-data
     retention-days: 7

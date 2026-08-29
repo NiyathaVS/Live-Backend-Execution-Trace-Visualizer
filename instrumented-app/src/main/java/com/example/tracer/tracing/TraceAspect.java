@@ -31,15 +31,55 @@ public class TraceAspect {
     @Value("${trace.redaction.enabled:true}")
     private boolean redactionEnabled;
 
+    /** Maximum length for a serialised return-value string sent over WebSocket. */
+    private static final int MAX_RETURN_VALUE_LENGTH = 500;
+
     public TraceAspect(TraceEventPublisher eventPublisher, InMemoryTraceCollector collector) {
         this.eventPublisher = eventPublisher;
         this.collector = collector;
     }
 
+    /**
+     * Truncate or summarise {@code value} so large collections and entities
+     * do not bloat the WebSocket payload.
+     */
+    private static Object safeReturnValue(Object value) {
+        if (value == null) return null;
+        // Collections and arrays: replace with a count summary
+        if (value instanceof java.util.Collection<?> col) {
+            return "[Collection size=" + col.size() + "]";
+        }
+        if (value.getClass().isArray()) {
+            return "[Array length=" + java.lang.reflect.Array.getLength(value) + "]";
+        }
+        // Strings: truncate if oversized
+        if (value instanceof String s) {
+            return s.length() > MAX_RETURN_VALUE_LENGTH
+                    ? s.substring(0, MAX_RETURN_VALUE_LENGTH) + "…"
+                    : s;
+        }
+        // Anything else: use toString() and truncate
+        String str = value.toString();
+        return str.length() > MAX_RETURN_VALUE_LENGTH
+                ? str.substring(0, MAX_RETURN_VALUE_LENGTH) + "…"
+                : str;
+    }
+
     @Around(
-        "within(@org.springframework.web.bind.annotation.RestController *) || " +
-        "within(@org.springframework.stereotype.Service *) || " +
-        "within(@org.springframework.stereotype.Repository *)"
+        // Trace all Spring-managed components in the application, but EXCLUDE:
+        //   1. The trace replay controller — UI calls to /traces/* must not
+        //      generate new trace entries.
+        //   2. The entire tracing infrastructure package — TraceAlertService,
+        //      TracePersistenceService, TraceSearchService, InMemoryTraceCollector,
+        //      etc. are internal bookkeeping; tracing them would (a) create
+        //      spurious request entries for every frontend poll cycle and (b)
+        //      produce null-requestId events because those calls have no HTTP
+        //      context / no MDC requestId set.
+        "(within(@org.springframework.web.bind.annotation.RestController *) || " +
+        " within(@org.springframework.stereotype.Service *)         || " +
+        " within(@org.springframework.stereotype.Repository *))" +
+        " && !within(com.example.tracer.controller.TraceReplayController)" +
+        " && !within(com.example.tracer.tracing..*)"
     )
     public Object traceMethod(ProceedingJoinPoint joinPoint) throws Throwable {
 
@@ -53,12 +93,17 @@ public class TraceAspect {
         
         TraceStack.push(context);
 
-        // Capture parameters safely
+        // Capture parameters using declared parameter names so that
+        // SensitiveDataRedactor can match keys like "password" or "token".
         Map<String, Object> params = new HashMap<>();
         Object[] args = joinPoint.getArgs();
+        String[] paramNames = signature.getParameterNames();
 
         for (int i = 0; i < args.length; i++) {
-            params.put("arg" + i, args[i]);
+            String key = (paramNames != null && i < paramNames.length && paramNames[i] != null)
+                    ? paramNames[i]
+                    : "arg" + i;
+            params.put(key, args[i]);
         }
 
         Object returnValue = null;
@@ -137,7 +182,7 @@ public class TraceAspect {
                 .timestamp(LocalDateTime.now())
                 .method(methodName)
                 .params(params)
-                .returnValue(returnValue)
+                .returnValue(safeReturnValue(returnValue))
                 .executionTimeMs(duration)
                 .parentMethod(parentMethod)
                 .sourceFile(sourceFile)

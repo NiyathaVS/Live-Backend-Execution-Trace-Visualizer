@@ -12,7 +12,7 @@ class TraceSearchServiceTests {
 
     @BeforeEach
     void setUp() {
-        collector = new InMemoryTraceCollector(100, 3600, "all");
+        collector = new InMemoryTraceCollector(100, 3600, "all", 100, 200);
         searchService = new TraceSearchService(collector);
     }
 

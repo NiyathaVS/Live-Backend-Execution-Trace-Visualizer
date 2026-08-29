@@ -8,11 +8,15 @@ import org.springframework.http.server.ServerHttpResponse;
 import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.server.HandshakeInterceptor;
 
+import java.util.List;
 import java.util.Map;
 
 /**
- * Rejects WebSocket upgrades whose {@code ?token=} query parameter does not
- * match the configured shared secret.
+ * Rejects WebSocket upgrades whose token does not match the configured shared secret.
+ *
+ * <p>The token is read from the {@code Sec-WebSocket-Protocol} subprotocol header
+ * (sent by the frontend as {@code token.<secret>}) rather than a URL query parameter.
+ * This keeps the secret out of server access logs and browser history.</p>
  *
  * <p>When the secret is blank or {@code none} (default for local dev), every
  * connection is allowed through so the project still works out-of-the-box
@@ -26,11 +30,7 @@ import java.util.Map;
  *   websocket:
  *     auth-token: "change-me-to-a-strong-secret"
  * </pre>
- * The frontend must then connect with:
- * <pre>
- *   ws://localhost:8080/ws/traces?token=change-me-to-a-strong-secret
- * </pre>
- * </p>
+ * The frontend must set {@code VITE_WS_TOKEN=change-me-to-a-strong-secret}.</p>
  */
 public class WebSocketAuthInterceptor implements HandshakeInterceptor {
 
@@ -38,6 +38,8 @@ public class WebSocketAuthInterceptor implements HandshakeInterceptor {
 
     /** Sentinel value: auth is disabled when this is the configured token. */
     private static final String AUTH_DISABLED = "none";
+    /** Subprotocol prefix the frontend uses to carry the token. */
+    private static final String TOKEN_PROTOCOL_PREFIX = "token.";
 
     private final String expectedToken;
 
@@ -57,8 +59,10 @@ public class WebSocketAuthInterceptor implements HandshakeInterceptor {
             return true;
         }
 
-        String query = request.getURI().getQuery(); // e.g. "token=abc123"
-        String provided = extractToken(query);
+        // Extract the token from the Sec-WebSocket-Protocol header values.
+        // The frontend sends ["trace", "token.<secret>"] as subprotocols.
+        List<String> protocols = request.getHeaders().get("Sec-WebSocket-Protocol");
+        String provided = extractTokenFromProtocols(protocols);
 
         if (expectedToken.equals(provided)) {
             logger.debug("WebSocket handshake authorised for {}", request.getRemoteAddress());
@@ -83,14 +87,18 @@ public class WebSocketAuthInterceptor implements HandshakeInterceptor {
     // ── helpers ───────────────────────────────────────────────────────────────
 
     /**
-     * Extract the {@code token} value from a raw query string.
-     * Does not use URL decoding — tokens should be plain ASCII secrets.
+     * Find the subprotocol entry that starts with {@value TOKEN_PROTOCOL_PREFIX}
+     * and return the value after the prefix.
      */
-    private static String extractToken(String query) {
-        if (query == null || query.isBlank()) return null;
-        for (String part : query.split("&")) {
-            if (part.startsWith("token=")) {
-                return part.substring("token=".length());
+    private static String extractTokenFromProtocols(List<String> protocols) {
+        if (protocols == null || protocols.isEmpty()) return null;
+        for (String header : protocols) {
+            // Each header value may itself be comma-separated
+            for (String proto : header.split(",")) {
+                String trimmed = proto.trim();
+                if (trimmed.startsWith(TOKEN_PROTOCOL_PREFIX)) {
+                    return trimmed.substring(TOKEN_PROTOCOL_PREFIX.length());
+                }
             }
         }
         return null;

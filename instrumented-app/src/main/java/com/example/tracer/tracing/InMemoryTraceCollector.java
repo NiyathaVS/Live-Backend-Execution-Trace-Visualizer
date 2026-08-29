@@ -9,16 +9,18 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 @Component
 public class InMemoryTraceCollector {
 
-    private static final long SLOW_THRESHOLD_MS = 250;
-    private static final long SLOW_SQL_THRESHOLD_MS = 500;
     private static final int DEFAULT_MAX_TRACES = 1000;
     private static final long DEFAULT_TTL_SECONDS = 3600; // 1 hour
-    
+
     private final int maxTraces;
     private final long ttlMillis;
     private final String samplingMode;
-    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
-    
+    private final long slowThresholdMs;
+    private final long slowSqlThresholdMs;
+    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock(true); // fair
+    // Tracks which traces need their critical path recalculated (set dirty on write, cleared on read)
+    private final ConcurrentHashMap<String, Boolean> criticalPathDirty = new ConcurrentHashMap<>();
+
     // LRU cache: LinkedHashMap with removeEldestEntry override for bounded size
     private final Map<String, CallTreeNode> traces;
     // Track creation time for each trace for TTL eviction
@@ -26,10 +28,13 @@ public class InMemoryTraceCollector {
     // Rolling durations per method for anomaly detection
     private final Map<String, List<Long>> methodDurationHistory = new ConcurrentHashMap<>();
 
-    public InMemoryTraceCollector(int maxTraces, long ttlSeconds, String samplingMode) {
+    public InMemoryTraceCollector(int maxTraces, long ttlSeconds, String samplingMode,
+                                  long slowThresholdMs, long slowSqlThresholdMs) {
         this.maxTraces = maxTraces > 0 ? maxTraces : DEFAULT_MAX_TRACES;
         this.ttlMillis = (ttlSeconds > 0 ? ttlSeconds : DEFAULT_TTL_SECONDS) * 1000;
         this.samplingMode = samplingMode != null ? samplingMode : "all";
+        this.slowThresholdMs    = slowThresholdMs    > 0 ? slowThresholdMs    : 100;
+        this.slowSqlThresholdMs = slowSqlThresholdMs > 0 ? slowSqlThresholdMs : 200;
         this.traces = new LinkedHashMap<String, CallTreeNode>(16, 0.75f, true) {
             @Override
             protected boolean removeEldestEntry(Map.Entry<String, CallTreeNode> eldest) {
@@ -43,9 +48,9 @@ public class InMemoryTraceCollector {
         }
     }
     
-    /** Constructor for backward compatibility */
+    /** Constructor for backward compatibility (tests) */
     public InMemoryTraceCollector(int maxTraces) {
-        this(maxTraces, DEFAULT_TTL_SECONDS, "all");
+        this(maxTraces, DEFAULT_TTL_SECONDS, "all", 100, 200);
     }
 
     /**
@@ -60,7 +65,7 @@ public class InMemoryTraceCollector {
             return true;
         }
         if ("slow".equalsIgnoreCase(samplingMode)) {
-            return executionTimeMs >= SLOW_SQL_THRESHOLD_MS;
+            return executionTimeMs >= slowSqlThresholdMs;
         }
         try {
             int percentage = Integer.parseInt(samplingMode);
@@ -111,6 +116,14 @@ public class InMemoryTraceCollector {
     }
 
     public void addEvent(TraceEvent event) {
+        // Defensive guard: events with no requestId have no HTTP context
+        // (e.g. internal background calls) — discard them to prevent a null
+        // key being inserted into the traces map, which would cause a
+        // NullPointerException later in getTrace() / ConcurrentHashMap.get().
+        if (event.getRequestId() == null) {
+            return;
+        }
+
         // Check if this event should be sampled
         if (!shouldSample(event.getExecutionTimeMs())) {
             return; // Skip sampling this event
@@ -146,12 +159,12 @@ public class InMemoryTraceCollector {
             boolean isSqlEvent = SqlTraceListener.EVENT_TYPE_SQL.equals(event.getEventType());
 
             if (isSqlEvent) {
-                if (event.isSlowQuery() || event.getExecutionTimeMs() >= SLOW_SQL_THRESHOLD_MS) {
+                if (event.isSlowQuery() || event.getExecutionTimeMs() >= slowSqlThresholdMs) {
                     node.setSlowPath(true);
                     node.setSlowQuery(true);
                     node.setLogicGapRisk(true);
                 }
-            } else if (event.getExecutionTimeMs() > SLOW_THRESHOLD_MS) {
+            } else if (event.getExecutionTimeMs() > slowThresholdMs) {
                 node.setSlowPath(true);
             }
 
@@ -163,7 +176,33 @@ public class InMemoryTraceCollector {
                 node.setResourceLeakSuspicion(false);
             }
 
-            if (methodName.contains("lock") || methodName.contains("synchronize") || methodName.contains("wait") || methodName.contains("semaphore")) {
+            // Contention detection — three independent signals, any one is enough:
+            //
+            // 1. Thread was BLOCKED or WAITING at method exit (captured by the aspect
+            //    after joinPoint.proceed() returns — the state at the end of the call).
+            // 2. CPU time is much less than wall time: the thread spent most of its time
+            //    waiting rather than computing (ratio < 20% of wall time, minimum 50ms
+            //    wall time to avoid noise on fast calls).
+            // 3. Method name contains classic synchronisation vocabulary (original check,
+            //    kept as a lightweight catch-all for utility helpers).
+            String threadState = event.getThreadState();
+            boolean blockedOrWaiting = "BLOCKED".equals(threadState)
+                    || "WAITING".equals(threadState)
+                    || "TIMED_WAITING".equals(threadState);
+
+            long wallMs = event.getExecutionTimeMs();
+            long cpuMs  = event.getThreadCpuTimeMs();
+            // Guard: only apply the CPU heuristic when wall time is meaningful (≥50ms)
+            // and CPU tracking returned a real value (>0).
+            boolean cpuStarved = wallMs >= 50 && cpuMs >= 0
+                    && (cpuMs * 5 < wallMs); // CPU < 20% of wall → mostly waiting
+
+            boolean nameHint = methodName.contains("lock")
+                    || methodName.contains("synchronize")
+                    || methodName.contains("wait")
+                    || methodName.contains("semaphore");
+
+            if (blockedOrWaiting || cpuStarved || nameHint) {
                 node.setContentionRisk(true);
             }
 
@@ -174,7 +213,7 @@ public class InMemoryTraceCollector {
                 node.setLogicGapRisk(true);
             }
 
-            if (event.getExecutionTimeMs() > SLOW_THRESHOLD_MS * 4) {
+            if (event.getExecutionTimeMs() > slowThresholdMs * 4) {
                 node.setLogicGapRisk(true);
             }
 
@@ -191,9 +230,6 @@ public class InMemoryTraceCollector {
                     root.addChild(node);
                 }
             }
-
-            // Calculate critical path after each event
-            calculateCriticalPath(root);
 
             if (!"ROOT".equals(event.getMethod())) {
                 recordMethodDuration(event.getMethod(), event.getExecutionTimeMs());
@@ -305,6 +341,23 @@ public class InMemoryTraceCollector {
     }
 
     public CallTreeNode getTrace(String requestId) {
+        // Fast path: check if a recalculation is needed before taking any lock.
+        if (Boolean.TRUE.equals(criticalPathDirty.get(requestId))) {
+            lock.writeLock().lock();
+            try {
+                // Re-check under the write lock (another thread may have already updated it).
+                if (Boolean.TRUE.equals(criticalPathDirty.get(requestId))) {
+                    CallTreeNode root = traces.get(requestId);
+                    if (root != null) {
+                        calculateCriticalPath(root);
+                    }
+                    criticalPathDirty.put(requestId, Boolean.FALSE);
+                }
+            } finally {
+                lock.writeLock().unlock();
+            }
+        }
+
         lock.readLock().lock();
         try {
             return traces.get(requestId);
@@ -331,7 +384,7 @@ public class InMemoryTraceCollector {
                 warnings.add("Errors detected in call tree: " + counter.errorCount + " nodes");
             }
             if (counter.slowNodeCount > 0) {
-                warnings.add("Slow nodes: " + counter.slowNodeCount + " nodes above " + SLOW_THRESHOLD_MS + "ms");
+                warnings.add("Slow nodes: " + counter.slowNodeCount + " nodes above " + slowThresholdMs + "ms");
             }
             if (counter.resourceLeakSuspectCount > 0) {
                 warnings.add("Resource leak candidates: " + counter.resourceLeakSuspectCount);
@@ -388,9 +441,20 @@ public class InMemoryTraceCollector {
 
     public MetricsDashboardReport getMetricsDashboard() {
         lock.readLock().lock();
+        // Take a snapshot of the values while the read lock is held.
+        // Iterating directly on traces.values() after releasing the lock
+        // (or interleaved with a write lock acquiring removeEldestEntry) can
+        // throw ConcurrentModificationException because the underlying
+        // LinkedHashMap iterator is not thread-safe across structural modifications.
+        final List<CallTreeNode> snapshot;
+        try {
+            snapshot = new ArrayList<>(traces.values());
+        } finally {
+            lock.readLock().unlock();
+        }
         try {
             Map<String, MethodStat> globalStats = new HashMap<>();
-            for (CallTreeNode root : traces.values()) {
+            for (CallTreeNode root : snapshot) {
                 collectMethodStats(root, globalStats);
             }
 
@@ -412,14 +476,15 @@ public class InMemoryTraceCollector {
                 }
             }
 
+            int traceCount = snapshot.size();
             return new MetricsDashboardReport(
-                    traces.size(),
-                    traces.size(),
+                    traceCount,
+                    traceCount,
                     metrics,
                     anomalies.stream().limit(10).toList()
             );
         } finally {
-            lock.readLock().unlock();
+            // Read lock was already released after snapshot — nothing to unlock here.
         }
     }
 

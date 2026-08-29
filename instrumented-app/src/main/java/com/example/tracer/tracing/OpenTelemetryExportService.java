@@ -24,9 +24,11 @@ public class OpenTelemetryExportService {
             return Map.of("resourceSpans", List.of());
         }
 
-        long traceStartNs = root.getStartTime() * 1_000_000L;
+        // traceStartMs is the epoch-millisecond baseline for the whole trace.
+        // Each span's absolute start is computed from its own startTime field.
+        long traceStartMs = root.getStartTime();
         List<Map<String, Object>> spans = new ArrayList<>();
-        collectSpans(root, traceId, traceStartNs, spans);
+        collectSpans(root, traceId, traceStartMs, spans);
 
         Map<String, Object> resource = Map.of(
                 "attributes", List.of(
@@ -47,9 +49,12 @@ public class OpenTelemetryExportService {
         return Map.of("resourceSpans", List.of(resourceSpan));
     }
 
-    private void collectSpans(CallTreeNode node, String traceId, long traceStartNs, List<Map<String, Object>> spans) {
+    private void collectSpans(CallTreeNode node, String traceId, long traceStartMs, List<Map<String, Object>> spans) {
         if (!"ROOT".equals(node.getMethodName()) && node.getSpanId() != null) {
-            long startNs = traceStartNs;
+            // Use the node's own startTime (epoch ms) converted to nanoseconds.
+            // Fall back to traceStartMs when startTime is not set (legacy nodes).
+            long nodeStartMs = node.getStartTime() > 0 ? node.getStartTime() : traceStartMs;
+            long startNs = nodeStartMs * 1_000_000L;
             long endNs = startNs + node.getExecutionTime() * 1_000_000L;
 
             Map<String, Object> span = new LinkedHashMap<>();
@@ -92,7 +97,7 @@ public class OpenTelemetryExportService {
         }
 
         for (CallTreeNode child : node.getChildren()) {
-            collectSpans(child, traceId, traceStartNs, spans);
+            collectSpans(child, traceId, traceStartMs, spans);
         }
     }
 
