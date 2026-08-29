@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import * as d3 from "d3";
 
 /**
@@ -16,19 +16,36 @@ export default function ComparisonView({
     const ref1 = useRef(null);
     const ref2 = useRef(null);
     const containerRef = useRef(null);
+    // Track container width so trees reflow correctly on window resize.
+    const [containerWidth, setContainerWidth] = useState(0);
 
     const addedSet = new Set(addedMethods);
     const removedSet = new Set(removedMethods);
 
+    // Observe container size and update state when it changes.
+    useEffect(() => {
+        const el = containerRef.current;
+        if (!el) return;
+        const observer = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                setContainerWidth(entry.contentRect.width);
+            }
+        });
+        observer.observe(el);
+        // Set initial width immediately
+        setContainerWidth(el.clientWidth);
+        return () => observer.disconnect();
+    }, []);
+
     useEffect(() => {
         if (!data1 || !ref1.current) return;
-        renderTree(ref1.current, data1, removedSet, "removed");
-    }, [data1, removedMethods]);
+        renderTree(ref1.current, data1, removedSet, "removed", containerWidth);
+    }, [data1, removedMethods, containerWidth]);
 
     useEffect(() => {
         if (!data2 || !ref2.current) return;
-        renderTree(ref2.current, data2, addedSet, "added");
-    }, [data2, addedMethods]);
+        renderTree(ref2.current, data2, addedSet, "added", containerWidth);
+    }, [data2, addedMethods, containerWidth]);
 
     return (
         <div
@@ -71,11 +88,11 @@ export default function ComparisonView({
     );
 }
 
-function renderTree(svgEl, data, highlightSet, highlightType) {
+function renderTree(svgEl, data, highlightSet, highlightType, containerWidth) {
     const svg = d3.select(svgEl);
     svg.selectAll("*").remove();
 
-    const containerWidth = svgEl.parentElement?.clientWidth || 500;
+    const effectiveWidth = containerWidth > 0 ? containerWidth : (svgEl.parentElement?.clientWidth || 500);
     const dx = 120;
     const dy = 70;
 
@@ -86,7 +103,7 @@ function renderTree(svgEl, data, highlightSet, highlightType) {
     const x1 = d3.max(root.descendants(), (d) => d.x) ?? 0;
     const y1 = d3.max(root.descendants(), (d) => d.y) ?? 0;
 
-    const width = Math.max(containerWidth, x1 - x0 + dx * 2);
+    const width = Math.max(effectiveWidth, x1 - x0 + dx * 2);
     const height = Math.max(260, y1 + dy * 2);
 
     svg.attr("viewBox", [0, 0, width, height])

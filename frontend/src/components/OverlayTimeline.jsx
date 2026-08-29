@@ -120,16 +120,30 @@ function normalize(events) {
     return { sorted, bars, total };
 }
 
+/**
+ * Estimate divergence by matching events that share the same method name
+ * across both traces, then averaging the absolute timestamp differences.
+ * This is meaningful even when the two traces have different numbers of events,
+ * unlike the previous position-based approach.
+ */
 function estimateDivergence(a, b) {
-    const count = Math.min(a.length, b.length);
-    if (count === 0) return 0;
-    let divergence = 0;
-    for (let i = 0; i < count; i++) {
-        const dt = Math.abs(
-            new Date(a[i].timestamp).getTime() - new Date(b[i].timestamp).getTime()
-        );
-        divergence += dt;
+    // Build a method → first-occurrence timestamp map for each trace
+    const mapA = new Map();
+    for (const e of a) {
+        if (e.method && !mapA.has(e.method)) {
+            mapA.set(e.method, new Date(e.timestamp).getTime());
+        }
     }
-    return divergence / count;
+
+    let total = 0;
+    let matched = 0;
+    for (const e of b) {
+        if (e.method && mapA.has(e.method)) {
+            total += Math.abs(new Date(e.timestamp).getTime() - mapA.get(e.method));
+            matched++;
+        }
+    }
+
+    return matched === 0 ? 0 : total / matched;
 }
 

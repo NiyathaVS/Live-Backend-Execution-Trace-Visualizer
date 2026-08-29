@@ -124,6 +124,10 @@ export default function CodePreview({ className, lineNumber, onClose }) {
 /**
  * Simple Java syntax highlighter.
  * Highlights keywords, strings, comments, numbers.
+ *
+ * The raw line is HTML-escaped first so that Java generics (List<String>)
+ * and any other angle-bracket characters cannot break the HTML structure
+ * or inject arbitrary markup.
  */
 function highlightJavaCode(line) {
     const keywords = [
@@ -135,14 +139,17 @@ function highlightJavaCode(line) {
         "List", "Map", "Set", "ArrayList", "HashMap", "var", "const"
     ];
 
-    // Split while preserving special parts
-    let result = line;
+    // Escape the raw line first — this neutralises < > & " ' so that
+    // Java generics and any other special chars are safe before we add
+    // our own <span> wrappers below.
+    let result = escapeHtml(line);
 
-    // Comments
-    result = result.replace(/\/\/.*$/g, (match) => `<span class="comment">${escapeHtml(match)}</span>`);
+    // Comments (already escaped, so match the escaped text)
+    result = result.replace(/\/\/.*$/g, (match) => `<span class="comment">${match}</span>`);
 
-    // String literals
-    result = result.replace(/"[^"]*"/g, (match) => `<span class="string">${escapeHtml(match)}</span>`);
+    // String literals (escaped quotes become &quot; — match that too)
+    result = result.replace(/&quot;[^&]*(?:&(?!quot;)[^&]*)*&quot;/g,
+        (match) => `<span class="string">${match}</span>`);
 
     // Numbers
     result = result.replace(/\b(\d+)\b/g, (match) => `<span class="number">${match}</span>`);

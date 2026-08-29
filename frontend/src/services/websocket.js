@@ -11,23 +11,32 @@ let activeOnMessage = null;   // retained so reconnects re-attach the same handl
 
 // Get WebSocket URL from environment or use default.
 // Supports: VITE_WS_URL, VITE_API_URL, or defaults to localhost:8080.
-// If VITE_WS_TOKEN is set it is appended as ?token=<secret>.
+// The token is no longer appended as a query parameter (which would appear
+// in server access logs and browser history). Instead it is passed via the
+// Sec-WebSocket-Protocol subprotocol field — the only place the browser
+// WebSocket API allows carrying extra data on the upgrade request.
 function getWebSocketUrl() {
-    let base;
     if (import.meta.env.VITE_WS_URL) {
-        base = import.meta.env.VITE_WS_URL;
-    } else if (import.meta.env.VITE_API_URL) {
-        base = import.meta.env.VITE_API_URL.replace(/^http/, 'ws') + '/ws/traces';
-    } else {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        base = `${protocol}//localhost:8080/ws/traces`;
+        return import.meta.env.VITE_WS_URL;
     }
+    if (import.meta.env.VITE_API_URL) {
+        return import.meta.env.VITE_API_URL.replace(/^http/, 'ws') + '/ws/traces';
+    }
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${protocol}//localhost:8080/ws/traces`;
+}
 
+/**
+ * Return the subprotocol list to pass to new WebSocket(url, protocols).
+ * When VITE_WS_TOKEN is set the token is sent as a subprotocol value so
+ * it never appears in URLs, access logs, or browser history.
+ */
+function getSubprotocols() {
     const token = import.meta.env.VITE_WS_TOKEN;
     if (token && token.trim() !== '') {
-        return `${base}?token=${encodeURIComponent(token)}`;
+        return ['trace', `token.${token.trim()}`];
     }
-    return base;
+    return [];
 }
 
 function scheduleReconnect() {
@@ -49,7 +58,8 @@ function scheduleReconnect() {
 
 function openSocket(onMessage) {
     const wsUrl = getWebSocketUrl();
-    socket = new WebSocket(wsUrl);
+    const protocols = getSubprotocols();
+    socket = protocols.length > 0 ? new WebSocket(wsUrl, protocols) : new WebSocket(wsUrl);
 
     socket.onopen = () => {
         console.log(`WebSocket connected to ${wsUrl}`);
