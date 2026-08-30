@@ -1,428 +1,334 @@
 # Live Backend Execution Trace Visualizer
 
 **Companion docs**
-
-- [Complete Feature List](docs/FEATURES.md) — comprehensive list of all implemented features
-- [Architecture diagrams (Mermaid)](docs/ARCHITECTURE.md) — system context, sequences, component map, frontend pipeline
-- [Engineering onboarding & handoff](docs/ENGINEERING_ONBOARDING.md) — sequences, glossary, ops notes, extension playbook
-- [Portfolio / resume narrative](docs/PORTFOLIO_RESUME_VERSION.md) — elevator pitch, resume bullets, interview story
-
----
-
-## 1) Project Overview
-
-This project is a full-stack, real-time execution tracing system for a Spring Boot backend. It instruments method calls at runtime and streams trace events to a React frontend for live visualization and analysis.
-
-At its current stage, it supports:
-
-- Runtime tracing of controller/service/repository calls with **stable span IDs**
-- Parent-child call graph modeling with **UUID-based span linkage**
-- Per-request trace grouping with correlation IDs
-- Real-time WebSocket streaming with **configurable URLs**
-- Interactive tree and flame-style visualizations
-- Cross-request comparison (visual + analytical diff)
-- Error-aware trace nodes with stack trace details
-- Timeline exploration with zoom/pan
-- **CPU time tracking** via ThreadMXBean
-- **Sensitive data redaction** (passwords, tokens, PII)
-- **Configurable sampling** (all, slow, percentage-based)
-- **Memory management** (TTL, max traces, LRU eviction)
-- **SQL query tracing** with slow query detection
-- **Comprehensive test suite** with CI/CD pipeline
-
-The repository is currently centered on two active modules:
-
-- `instrumented-app` (backend + trace emitter + in-memory trace store + analysis endpoints)
-- `frontend` (real-time UI and analysis views)
+- [Architecture Diagrams](docs/ARCHITECTURE.md)
+- [API Reference](docs/API_REFERENCE.md)
+- [Feature Checklist](docs/FEATURES.md)
+- [Engineering Onboarding](docs/ENGINEERING_ONBOARDING.md)
+- [Portfolio / Resume Narrative](docs/PORTFOLIO_RESUME_VERSION.md)
+- [Implementation History](IMPLEMENTATION_SUMMARY.md)
 
 ---
 
-## 2) High-Level Architecture
+## 1. Project Overview
+
+A full-stack, real-time execution tracing system for Spring Boot applications. Method calls are instrumented at runtime via AOP, producing structured `TraceEvent` records that stream over WebSocket to a professional three-column React observability dashboard.
+
+**Current capabilities:**
+
+- Runtime tracing of all `@RestController` / `@Service` / `@Repository` calls with stable UUID span IDs
+- SQL query tracing via custom JDBC proxy with N+1 pattern detection
+- Statistical metrics (p50/p95/p99) per method with anomaly detection
+- Root-cause analysis with automatic hint generation
+- Rule-based alert engine with severity levels
+- Cross-request trace diff (added/removed methods, timing deltas)
+- Trace persistence, share links, and multi-format export (JSON, SVG, PDF, OTEL)
+- Async context propagation for `@Async` and `CompletableFuture`
+- Distributed trace header propagation (W3C `traceparent`, `X-Trace-Id`)
+- Production hardening: configurable sampling, TTL+LRU memory management, PII redaction, WebSocket auth
+
+The repository has two active modules:
+
+- **`instrumented-app`** — Spring Boot app with AOP tracing, in-memory collector, analysis engine, and all REST/WebSocket APIs
+- **`frontend`** — React + D3 dashboard with professional observability UI
+
+---
+
+## 2. High-Level Architecture
 
 ### Backend (`instrumented-app`)
 
-- Spring Boot application with AOP tracing
-- `OncePerRequestFilter` assigns request-scoped correlation id (`requestId`)
-- `TraceAspect` intercepts method execution and builds `TraceEvent` objects
-- Events are:
-  - printed as JSON (`ConsoleTraceEventPublisher`)
-  - ingested into in-memory call tree (`InMemoryTraceCollector`)
-  - broadcast live to frontend via WebSocket (`TraceWebSocketHandler`)
-- REST endpoints expose trace replay, analysis, source snippet lookup, and trace diff
+- `RequestIdFilter` — assigns UUID `requestId` per request, stores in MDC
+- `TraceAspect` — AOP `@Around` advice building `TraceEvent` objects (Lombok `@Builder`)
+- `InMemoryTraceCollector` — builds `CallTreeNode` trees; sets risk flags, critical path, LRU+TTL retention, sampling
+- `TraceRootCauseAnalyzer` — derives `rootCauseHints`, `nPlusOneWarnings`, `anomalies`
+- `TraceAlertService` — rule-based alert firing with ERROR/WARN severity
+- `TraceWebSocketHandler` — broadcasts live events to all connected sessions
+- `TracingDataSource` / `SqlTraceListener` — JDBC proxy capturing SQL text, duration, slow flag
+- `SensitiveDataRedactor` — pattern-based PII/credential scrubbing
+- `GlobalExceptionHandler` — `@RestControllerAdvice` that catches unhandled exceptions and returns JSON error responses tagged with `requestId` from MDC
+- `ReactorTraceContextConfig` / `ReactorTraceContextAccessor` — Reactor `Mono`/`Flux` context propagation; wraps reactive chains to carry `parentSpanId` and MDC across thread hops
+- REST API layer — metrics, search, diff, persistence, export, source lookup, replay
 
 ### Frontend (`frontend`)
 
-- React + D3 single-page app
-- Opens WebSocket connection to backend (`/ws/traces`)
-- Groups incoming events per request and reconstructs trees
-- Supports:
-  - Tree view
-  - Flame graph view
-  - Per-request timeline
-  - Compare mode with analytical diff panel
-  - Overlay timeline for divergence preview
+- `useTraceStream` hook — WebSocket connection with auto-reconnect; writes to `eventsByRequest`
+- `useSearchAndMetrics` hook — polls metrics, alerts, history, search every 15 s
+- `useComparisonState` hook — fetches diff report from backend when compare request selected
+- `buildTracesFromEvents` (traceUtils.js) — builds call trees from raw events (tolerates out-of-order delivery)
+- Dashboard shell: KPI Bar → Sidebar Tabs → Alert Rail → Toolbar → Visualizations
 
 ---
 
-## 3) Backend Details
+## 3. Backend Details
 
-## 3.1 Runtime Tracing Pipeline
+### 3.1 Runtime Tracing Pipeline
 
-1. Request enters backend.
-2. `RequestIdFilter` creates UUID and stores it in MDC.
-3. Traced methods execute through `TraceAspect` AOP proxy.
-4. `TraceAspect`:
-   - computes duration
-   - resolves parent method from `TraceStack`
-   - captures params/return
-   - captures error info (if thrown)
-   - captures source/thread metadata
-   - emits `TraceEvent`
-5. Event is:
-   - logged to console (JSON)
-   - appended to in-memory call tree
-   - pushed to all connected WebSocket sessions
+1. HTTP request arrives → `RequestIdFilter` creates UUID `requestId` → stored in MDC
+2. AOP proxy wraps each traced method via `TraceAspect`
+3. On method entry: peek parent `spanId` from `TraceStack`, push current `spanId`
+4. On method exit (or throw): compute duration, CPU time, capture params/return/error, build `TraceEvent`
+5. `TraceEvent` is simultaneously:
+   - Logged to console as JSON (`ConsoleTraceEventPublisher`)
+   - Added to `InMemoryTraceCollector` (tree building, heuristics, critical path, sampling, alerts)
+   - Broadcast to all WebSocket sessions (`TraceWebSocketHandler`)
+6. SQL queries intercepted by JDBC proxy follow the same collector + broadcast path
 
-## 3.2 Core Backend Classes
+### 3.2 Core Backend Classes
 
-- `RequestIdFilter`
-  - Assigns `requestId` per HTTP request
-  - Clears MDC + trace stack at request end
+| Class | Responsibility |
+|-------|---------------|
+| `RequestIdFilter` | UUID `requestId` → MDC; stack cleanup on request end |
+| `TraceStack` + `TraceContext` | ThreadLocal deque for parent-child span tracking |
+| `TraceAspect` | AOP `@Around` for controller/service/repository |
+| `TraceEvent` | Immutable event record, Lombok `@Builder` |
+| `InMemoryTraceCollector` | Tree building, LRU+TTL, sampling, heuristics, critical path |
+| `TraceRootCauseAnalyzer` | Hints, N+1 warnings, anomalies, contention detection |
+| `TraceAlertService` | Rule-based alerts, ERROR/WARN severity |
+| `MetricsDashboardReport` + stats | p50/p95/p99/variance/errorRate per method |
+| `TraceSearchService` | Method/duration/error filter with limit |
+| `TracePersistenceService` | File-based persistence, share links, history |
+| `TraceWebSocketHandler` | Session management, JSON broadcast |
+| `SensitiveDataRedactor` | Pattern-based PII/credential scrubbing |
+| `SqlTraceListener` | SQL event creation from JDBC proxy |
+| `TracingDataSource` / `TracingStatement` | JDBC proxy chain |
+| `AsyncContextPropagator` | `@Async` span continuity via `TaskDecorator` |
+| `DistributedTraceInterceptor` | Outbound `X-Trace-Id` / `traceparent` propagation |
+| `WebSocketAuthInterceptor` | Shared-secret `?token=` handshake guard |
+| `GlobalExceptionHandler` | `@RestControllerAdvice`; MDC-tagged JSON error responses for all unhandled exceptions |
+| `ReactorTraceContextConfig` | Captures and restores `parentSpanId` + MDC across Reactor operator hops |
+| `ReactorTraceContextAccessor` | Convenience bean — `withTraceContext(Mono/Flux)` wraps reactive chains |
 
-- `TraceStack` + `TraceContext`
-  - ThreadLocal stack to preserve parent-child relationships
+### 3.3 `TraceEvent` Wire Format
 
-- `TraceAspect`
-  - Intercepts:
-    - `@RestController`
-    - `@Service`
-    - `@Repository`
-  - Creates `TraceEvent` with:
-    - `eventId`, `spanId`, `parentSpanId` (stable UUID-based identifiers)
-    - `requestId`, `threadId`, `timestamp`
-    - `method`, `params`, `returnValue`
-    - `executionTimeMs`, `parentMethod` (fallback for backward compatibility)
-    - `sourceFile`, `sourceLine` (from AspectJ SourceLocation)
-    - `status`, `errorType`, `errorMessage`, `errorStackTrace`
-    - `threadName`, `threadCpuTimeMs` (actual CPU time via ThreadMXBean), `threadState`
-    - `eventType` (METHOD, SQL, etc.)
+| Field | Type | Notes |
+|-------|------|-------|
+| `eventId` | UUID string | Per-event unique identifier |
+| `spanId` | UUID string | Per-invocation stable ID |
+| `parentSpanId` | UUID string | Parent invocation span |
+| `requestId` | UUID string | HTTP request correlation |
+| `method` / `methodName` | string | Fully-qualified method signature |
+| `params` | object | Redacted method arguments |
+| `returnValue` | any | Redacted return value |
+| `executionTimeMs` | long | Wall-clock duration |
+| `threadCpuTimeMs` | long | CPU time via `ThreadMXBean` |
+| `threadName` / `threadState` | string | OS thread name + JVM state |
+| `timestamp` | ISO-8601 string | Invocation start time |
+| `status` | `SUCCESS` \| `ERROR` | Outcome |
+| `errorType` / `errorMessage` / `errorStackTrace` | string | Full exception detail |
+| `sourceFile` / `sourceLine` | string / int | AspectJ `SourceLocation` |
+| `eventType` | `METHOD` \| `SQL` | Span category |
+| `slowPath` / `isOnCriticalPath` | boolean | Collector heuristics |
+| `contentionRisk` / `resourceLeakSuspicion` / `logicGapRisk` | boolean | Additional risk signals |
+| `slowQuery` | boolean | SQL-only: execution ≥500ms |
+| `sql` | string | SQL-only: query text |
 
-- `InMemoryTraceCollector`
-  - Builds request-scoped `CallTreeNode` trees using **spanId/parentSpanId** for stable linkage
-  - Adds heuristic risk flags (slow/resource/logic/contention hints)
-  - Computes critical path on each update
-  - **Memory management**:
-    - Configurable max traces (LRU eviction)
-    - TTL-based cleanup with background thread
-  - **Sampling support**:
-    - "all", "slow" (>500ms), or percentage-based
-  - Supports:
-    - `analyzeTrace(requestId)` - comprehensive analysis with warnings
-    - `diffTraces(baseRequestId, compareRequestId)` - added/removed methods + timing deltas
-
-- `TraceReplayController`
-  - Exposes trace and analysis APIs (listed below)
-
-- `TraceWebSocketHandler`
-  - Manages active socket sessions
-  - Serializes `TraceEvent` and broadcasts to all clients
-  - **Configurable CORS origins** via `trace.websocket.allowed-origins`
-
-- `SensitiveDataRedactor`
-  - Pattern-based redaction of sensitive fields
-  - Detects passwords, tokens, API keys, PII
-  - Long alphanumeric/hex string detection
-  - Configurable via `trace.redaction.enabled`
-
-- `SqlTraceListener` + JDBC wrappers
-  - Intercepts SQL queries via custom DataSource
-  - Captures query text, execution time, parameters
-  - Slow query detection (>500ms threshold)
-
-## 3.3 Backend Demo Domain Flow
-
-Current demo endpoint `GET /users/{id}` triggers a richer nested call flow:
-
-- `UserController.getUser`
-  - `UserService.getUser`
-    - `ValidationService.validateUser`
-      - `ValidationService.basicChecks`
-      - `RiskAssessmentService.assessRisk`
-        - `RiskAssessmentService.callExternalRiskEngine`
-        - `RiskAssessmentService.parseRiskResponse`
-    - `UserRepository.findUserById`
-    - `ProfileEnrichmentService.enrichProfile`
-      - `ProfileEnrichmentService.loadPreferences`
-      - `ProfileEnrichmentService.computeRecommendations`
-
-This produces a non-trivial call tree for visualization/testing.
-
-## 3.4 Backend REST APIs
+### 3.4 Backend REST APIs
 
 Base path: `/traces`
 
-- `GET /traces/{requestId}`
-  - Returns text tree representation
+| Method | Path | Returns |
+|--------|------|---------|
+| `GET` | `/{requestId}` | Text tree |
+| `GET` | `/{requestId}/json` | Full `CallTreeNode` JSON |
+| `GET` | `/{requestId}/analysis` | `TraceAnalysisReport` (hints, warnings, N+1, anomalies) |
+| `GET` | `/diff` | `TraceDiffReport` (added/removed methods, timing deltas) |
+| `GET` | `/metrics/dashboard` | `MetricsDashboardReport` (p50/p95/p99 per method, anomalies) |
+| `GET` | `/search` | `TraceSearchResult[]` filtered by method/duration/error |
+| `GET` | `/history` | `PersistedTraceSummary[]` |
+| `GET` | `/alerts` | `TraceAlert[]` (optionally scoped to `?requestId=`) |
+| `POST` | `/{requestId}/persist` | `PersistedTraceReference` (shareId, sharePath) |
+| `GET` | `/{requestId}/export/json` | Raw JSON export |
+| `GET` | `/{requestId}/export/svg` | SVG diagram export |
+| `GET` | `/{requestId}/export/pdf` | PDF report export |
+| `GET` | `/{requestId}/export/otel` | OpenTelemetry OTLP JSON |
+| `GET` | `/source` | Source snippet (`className`, `lineNumber`, `contextLines`) |
+| `GET` | `/{requestId}/source` | Request-scoped source snippet |
+| `POST` | `/{requestId}/replay` | Safe replay instructions (no execution) |
 
-- `GET /traces/{requestId}/json`
-  - Returns full `CallTreeNode` JSON
+Additional demo endpoints:
 
-- `GET /traces/{requestId}/analysis`
-  - Returns `TraceAnalysisReport`
-  - Includes counts and warning summaries
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/users/{id}` | Triggers a 9-method call tree |
+| `GET` | `/orders/{id}/fulfillment` | Triggers a complex multi-service order flow |
 
-- `GET /traces/diff?baseRequestId=...&compareRequestId=...`
-  - Returns `TraceDiffReport`
-  - Includes:
-    - added methods
-    - removed methods
-    - top timing deltas
-
-- `GET /traces/source?className=...&lineNumber=...&contextLines=...`
-  - Attempts source snippet lookup around a line
-
-- `GET /traces/{requestId}/source?className=...&lineNumber=...&contextLines=...`
-  - Request-scoped source snippet lookup
-
-- `POST /traces/{requestId}/replay`
-  - **Safe replay endpoint** - returns replay instructions without executing arbitrary code
-  - Provides trace structure and manual replay guidance
-
-Additional application endpoint:
-
-- `GET /users/{id}`
-  - Generates trace events and returns `User-{id}`
-
-## 3.5 WebSocket Endpoint
+### 3.5 WebSocket Endpoint
 
 - Default: `ws://localhost:8080/ws/traces`
-- **Configurable via frontend `.env` file**:
-  - `VITE_WS_URL` - explicit WebSocket URL
-  - `VITE_API_URL` - API base URL (WebSocket URL derived)
-- Sends serialized `TraceEvent` messages in real time
-- **CORS origins configurable** via `application.yml`
+- Configured via frontend `VITE_WS_URL` or derived from `VITE_API_URL`
+- Sends serialized `TraceEvent` JSON in real time as each method completes
+- Auth: optional shared-secret `?token=` query parameter
 
-## 3.6 Configuration
-
-All trace features are configurable via `application.yml`:
+### 3.6 Configuration (`application.yml`)
 
 ```yaml
 trace:
   enabled: true
   max-traces: 1000          # LRU eviction limit
-  ttl-seconds: 3600         # 1 hour retention
-  sampling: all             # "all", "slow", or percentage like "10"
+  ttl-seconds: 3600         # 1 hour retention (0 = unlimited)
+  sampling: all             # "all", "slow" (>500ms), or percentage like "10"
   redaction:
-    enabled: true           # Redact sensitive data
+    enabled: true           # Redact passwords, tokens, PII
   websocket:
-    allowed-origins: "http://localhost:3000,http://localhost:5173"
+    allowed-origins: "http://localhost:5173"
+    auth-token: "none"      # Set to a secret string to require token auth
 ```
 
-**Port Configuration (Single Source of Truth)**:
+**Port reference (single source of truth):**
 - Backend: `8080` (Spring Boot default)
-- Frontend: `5173` (Vite default, configurable via `VITE_PORT`)
+- Frontend: `5173` (Vite default)
 
 ---
 
-## 4) Frontend Details
+## 4. Frontend Details
 
-## 4.1 Data and State Model
+### 4.1 State Model
 
-The frontend does not trust arrival order for parent insertion. It stores raw events by request and rebuilds trees:
+The frontend never trusts arrival order. Raw events are stored by request, and `buildTracesFromEvents` reconstructs the full tree on every update:
 
-- `eventsByRequest: { [requestId]: TraceEvent[] }`
-- `traces` is derived from `eventsByRequest`
-- Selected request and compare request are independent view controls
+- `eventsByRequest: { [requestId]: TraceEvent[] }` — raw event map from WebSocket
+- `traces` — derived call trees (re-built on every event batch)
+- `selectedRequestId` / `compareRequestId` — independent view controls
+- `requestStats` — per-request aggregates computed client-side (errors, slow, contention, totalMs)
 
-This approach avoids child-before-parent insertion loss during streaming.
+### 4.2 Dashboard Shell (`App.jsx`)
 
-## 4.2 Main UI Features (`App.jsx`)
+The dashboard is a fixed-height 3-column grid that fills the viewport. No full-page scroll — each region independently scrolls its own content.
 
-- Real-time stream controls
-  - Pause/resume live ingestion
-  - Clear all traces
+**Header (52 px):**
+- Gradient top-line accent, glass blur backdrop
+- Logo with brand gradient, gradient-text wordmark
+- Live pill (LIVE badge + ev/s counter), alerts pill, Pause/Resume, Clear
 
-- Request navigation
-  - Active request list
-  - Request search
-  - Request bookmarking (star toggle)
+**KPI Summary Bar (`KpiBar.jsx`) — 4 cards:**
+- Live Traces · Error Rate · Peak p99 · Active Alerts
+- Each card: ambient glow blob, neon value text, sub-label, bottom accent line
+- Colour-coded with green / orange / red thresholds
 
-- View modes
-  - Tree
-  - Flame graph
+**Left sidebar (260 px) — 2 tabs:**
+1. **Traces** — NeoInput search/filter, request cards with health grade (A–F with numeric score), duration bar, error/slow/SQL/contention badges, relative timestamp, bookmark star
+2. **Search** — method name / min duration / errors-only filters; search results + persisted history
+- Alert dock always visible at bottom when alerts are active
 
-- Comparison features
-  - Choose compare request
-  - Side-by-side visualization panels
-  - Analytical diff summary
-  - Overlay timeline (base vs compare)
+**Centre panel (flex 1):**
+- `TraceSummaryBar` — request ID chip, health grade badge, summary chips (spans/peak/errors/slow/SQL/contention), view toggle, compare dropdown, Export dropdown
+- `SpanStatsMiniRow` — 8 live numbers: Total Duration · Spans · Errors · Slow Paths · SQL Queries · Critical Path · Threads · Peak Span
+- `AlertRail` — collapsible per-severity notification banner
+- Scrollable content: `TraceTree` or `FlameGraph` (toggled) → `RequestTimeline` → `NodeDetailPanel` (on node select) → `ComparisonSection` (on compare select) → `SqlInspector` (when SQL spans present)
 
-- Node details panel
-  - Method, duration, timestamp, thread, parent
-  - Params/return JSON
-  - Error status/type/message/stack trace when present
+**Right insight rail (280 px) — always visible, auto-scrollable:**
+- `AnalysisBanner` — root-cause hints, N+1 warnings, anomalies
+- **Slowest Spans** — top 6 spans by duration, each with inline proportional bar
+- **Span Breakdown** — METHOD/SQL/ERROR type counts with percentage bars
+- `LocalMethodMetrics` — method latency table computed client-side from `flatEvents` (no backend call): call count, error%, max ms, relative bar
 
-## 4.3 Visualization Components
+**Empty state:**
+- 6-card feature overview grid (colour-tinted per feature)
+- Two sample request buttons with loading / success / error / glow feedback
 
-- `TraceTree.jsx`
-  - Vertical centered tree layout using D3
-  - Collapsible subtrees
-  - Method filter dimming
-  - Slow path highlighting
-  - Error nodes highlighted in red
-  - Compact visible labels
+### 4.3 Visualization Components
 
-- `FlameGraph.jsx`
-  - Horizontal stacked bars by depth
-  - Width scaled by execution time
-  - Error-aware coloring
-  - In-bar labels when space allows
+| Component | Description |
+|-----------|-------------|
+| `TraceTree.jsx` | D3 force-graph; collapsible, filterable, particle animation on new events; natural SVG height (≥460 px) |
+| `FlameGraph.jsx` | Click-to-zoom with breadcrumbs; hotspot sidebar; critical-path glow; risk chips; 440 px fixed height with internal scroll |
+| `RequestTimeline.jsx` | Thread swimlane; 1×–20× zoom; drag-to-pan; colour-coded span types |
+| `NodeDetailPanel.jsx` | Info / Params / Stack Trace / SQL tabs per selected node |
+| `SqlInspector.jsx` | N+1 detection; queries grouped by text; per-call timing chips; stat cards with glow |
+| `KpiBar.jsx` | 4 headline KPI cards; ambient glow blobs; neon value text; bottom accent line |
+| `AlertRail.jsx` | Collapsible alert banner; per-alert dismiss; critical pulse animation |
+| `ExportDropdown.jsx` | JSON/SVG/PDF/OTEL download + share link generation in one menu |
+| `ComparisonSection.jsx` | Diff summary + side-by-side trees + overlay timeline |
+| `ComparisonView.jsx` | D3 side-by-side trees with added/removed highlighting |
+| `OverlayTimeline.jsx` | Base vs. compare time-axis overlay |
+| `AnalysisBanner.jsx` | Root-cause hints / N+1 warnings / anomalies banner |
+| `MetricsDashboard.jsx` | p50/p95/p99 sparkbars; anomaly callout; hot method highlighting (used in Stats sidebar if backend reachable) |
+| `CodePreview.jsx` | Inline Java source viewer; fetches snippet from `GET /traces/source`; highlights keywords, strings, comments, numbers; shows ±7 context lines around the target line |
 
-- `RequestTimeline.jsx`
-  - Request call bars on time axis
-  - Zoom slider (1x to 10x)
-  - Drag-to-pan window
-  - Visible range indicators
+### 4.4 Frontend Service Layer
 
-- `OverlayTimeline.jsx`
-  - Base/compare normalized tracks
-  - Side-by-side overlay bars
-  - Simple divergence estimate
-
-- `ComparisonView.jsx`
-  - Legacy/alternate compare view component exists in codebase
-  - Not currently wired into `App.jsx`
-
-## 4.4 Frontend Service Layer
-
-- `services/websocket.js`
-  - Handles open/message/close callbacks
-  - Parses each event JSON and forwards to app state
-
----
-
-## 5) Implemented Feature Inventory (Current State)
-
-## 5.1 Core Tracing
-
-- Request-scoped correlation id
-- Thread-local parent chain tracking
-- AOP interception at controller/service/repository layers
-- Method params, return value, duration, parent method capture
-- WebSocket event broadcast
-- Console JSON trace output
-
-## 5.2 Error and Diagnostics
-
-- `SUCCESS/ERROR` event status
-- Error type + message + stack trace propagation
-- Error node highlighting in UI
-- Error details in selected-node panel
-
-## 5.3 Analysis Features
-
-- Critical path marking in backend call tree
-- Basic trace analysis report with warnings
-- Analytical diff between two request traces:
-  - added methods
-  - removed methods
-  - timing deltas
-
-## 5.4 Visualization/UX
-
-- Vertical tree with clear root positioning
-- Flame graph mode toggle
-- Timeline with zoom + drag
-- Compare request flow
-- Overlay timeline divergence view
-- Method filtering
-- Request search and bookmarks
+| Module | Responsibility |
+|--------|---------------|
+| `services/websocket.js` | WebSocket lifecycle; exponential-backoff reconnect (1 s → 30 s cap) |
+| `services/traceApi.js` | REST API client (metrics, diff, search, history, alerts, export, persist) |
+| `services/traceUtils.js` | Pure functions: `computeMetrics`, `flattenEvents`, `buildTracesFromEvents`, `extractClassNameFromMethod` |
+| `hooks/useTraceStream.js` | WebSocket event ingestion; pause/resume; `latestEvent` for animations |
+| `hooks/useSearchAndMetrics.js` | Polls metrics, alerts, history; debounces search |
+| `hooks/useComparisonState.js` | Manages compare request selection + diff API fetch |
 
 ---
 
-## 6) Configuration and Runtime
+## 5. Testing
 
-## 6.1 Backend
+### Backend (JUnit)
 
-- Java 17
-- Spring Boot 3.2.1
-- Main dependencies:
-  - web, aop, websocket, actuator
-  - Jackson JSR310 module
-- Config:
-  - `trace.enabled: true` in `application.yml`
-
-## 6.2 Frontend
-
-- React 19 + Vite + D3
-- Dev server is configured for port `3000` in `vite.config.js`
-
----
-
-## 7) Current Known Gaps / Caveats
-
-- Parent linkage uses method name matching (`parentMethod`) rather than stable span IDs, which can be ambiguous with repeated method names.
-- `threadCpuTimeMs` is currently set to `0L` in `TraceAspect` (placeholder metric).
-- `SourceCodeHelper` source lookup depends on source availability on classpath; can return `null`.
-- Replay endpoint is currently placeholder text (not reflective re-execution).
-- `shared-model` and `trace-collector` are present but not implemented as decoupled runtime modules yet.
-- `README.md` mentions port `5173`, while `vite.config.js` sets frontend to `3000`.
-
----
-
-## 8) Version 2 Progress Mapping (from `Version2.md`)
-
-### Implemented / Partially Implemented
-
-- Error and exception flow visualization: implemented
-- Analytical trace diff engine: implemented (MVP)
-- Flame graph mode: implemented
-- Timeline zoom + drag: implemented
-- Cross-request overlay timeline: implemented (MVP divergence heuristic)
-
-### Recently Implemented (v2 completion)
-
-- **Distributed tracing**: inbound `X-Trace-Id` / W3C `traceparent` parsing in `RequestIdFilter`; outbound propagation via `DistributedTraceInterceptor`
-- **Async context propagation**: `AsyncContextPropagator` + `traceAsyncExecutor` bean; `TraceContextPropagator` for `CompletableFuture`
-- **SQL tracing + N+1 detection**: JDBC wrappers + `SqlTraceListener`; N+1 heuristics in `TraceRootCauseAnalyzer`
-- **Persistence/export**: `TracePersistenceService` (file storage, share links, retention); export endpoints for JSON/SVG/PDF
-- **Metrics dashboard**: `GET /traces/metrics/dashboard` with p50/p95/p99, variance, error rate; `MetricsDashboard` UI component
-- **Root-cause + anomalies**: extended `TraceAnalysisReport` with `rootCauseHints`, `nPlusOneWarnings`, `anomalies`
-- **Stable span linkage**: `spanId`/`parentSpanId` in backend + frontend tree builder
-- **Backend-driven compare diff**: UI fetches `GET /traces/diff` instead of client-side diff
-
----
-
-## 9) Suggested Next Engineering Steps
-
-1. Add Reactor/WebFlux `Context` propagation for fully reactive stacks.
-2. Replace file-based persistence with object storage / DB for multi-instance deployments.
-3. Add OpenTelemetry exporter bridge for interoperability with standard APM tools.
-4. Harden PDF export (rich layout) and add trace search/indexing over persisted archives.
-5. Add auth on share links and export endpoints for production hardening.
-
----
-
-## 10) Quick Run Reference
-
-Backend:
+- Call tree building: span ID linkage, out-of-order events, orphan spans, duplicate methods
+- Diff logic: added/removed methods, timing deltas, edge cases
+- Redaction: password/token/PII patterns, long string detection, non-string preservation
+- Concurrency: parallel ingestion, LRU under load, WebSocket broadcast under concurrent reads
+- OTel export: OTLP JSON structure validation
+- Search: method filter, duration filter, error filter
 
 ```bash
-cd instrumented-app
-./gradlew bootRun
+cd instrumented-app && ./gradlew test
 ```
 
-Frontend:
+### Frontend (Vitest — 17 tests)
+
+- `computeMetrics` — slow-path selection, node counting, maxExecution
+- `flattenEvents` — DFS ordering, ROOT node exclusion
+- `extractClassNameFromMethod` — FQN parsing, edge cases
+- `buildTracesFromEvents` — span linkage, orphan handling, multi-request isolation
 
 ```bash
-cd frontend
-npm install
-npm run dev
+cd frontend && npm test
 ```
 
-Trigger traces:
+### CI/CD (GitHub Actions)
+
+- Both test suites run on every push and PR
+- Frontend build (`npm run build`) validated on every push
+- Test and build artifacts uploaded
+
+---
+
+## 6. Known Gaps & Honest Scope
+
+| Area | Status |
+|------|--------|
+| WebFlux / Reactor Context propagation | Not implemented |
+| Cross-service distributed span merging | Partial — infrastructure exists, merge logic incomplete |
+| Persistent storage (DB / object store) | File-based only; single-instance |
+| Alert acknowledgement API | Not implemented — alerts accumulate |
+| Time-series latency endpoint | Not implemented — metrics returns aggregate snapshot |
+| Accessibility (keyboard nav, ARIA) | Minimal |
+
+---
+
+## 7. Suggested Next Engineering Steps
+
+1. **Deploy** — Railway/Render (backend) + Vercel/Netlify (frontend) for a publicly shareable live demo
+2. **Time-series endpoint** — add `GET /traces/metrics/timeseries?method=X&buckets=20` to power latency trend charts in the right rail
+3. **Alert acknowledgement** — `POST /traces/alerts/{id}/acknowledge` so alerts can be dismissed server-side
+4. **WebFlux support** — Reactor `Context` propagation for fully reactive stacks
+5. **Persistent storage** — swap file-based persistence for PostgreSQL or object storage for multi-instance deployments
+6. **Accessibility** — keyboard navigation and ARIA roles for the D3 visualisations
+
+---
+
+## 8. Quick Run Reference
 
 ```bash
+# Backend
+cd instrumented-app && ./gradlew bootRun
+# → http://localhost:8080
+
+# Frontend
+cd frontend && npm install && npm run dev
+# → http://localhost:5173
+
+# Trigger traces
 curl http://localhost:8080/users/2
+curl http://localhost:8080/orders/1001/fulfillment
 ```
-

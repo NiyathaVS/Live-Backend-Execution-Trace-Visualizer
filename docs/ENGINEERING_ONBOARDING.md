@@ -1,33 +1,31 @@
-# Engineering onboarding & handoff
+# Engineering Onboarding & Handoff
 
 Audience: engineers joining the project or reviewing it for maintenance, extension, or production hardening.
 
 ---
 
-## 1. What this system does (one paragraph)
+## 1. What This System Does (One Paragraph)
 
-A **Spring Boot** service is instrumented with **Spring AOP** so that each traced method call produces a **`TraceEvent`** (method, timing, params, return, parent link, errors). Events are **logged**, stored in an **in-memory call tree** per `requestId`, and **streamed live** over **WebSockets** to a **React + D3** UI that reconstructs call trees, timelines, flame-style views, and compare/diff summaries.
+A **Spring Boot** service is instrumented with **Spring AOP** so that each traced method call produces a **`TraceEvent`** (method, timing, CPU time, params, return, errors, span IDs). Events are logged, stored in an **in-memory call tree** per `requestId`, and streamed live over **WebSocket** to a **React + D3 professional observability dashboard**. The dashboard displays a KPI summary bar, interactive call trees, flame graphs, thread swimlane timelines, SQL query inspection, statistical metrics with sparkbars, root-cause hints, alert notifications, cross-request diffs, and multi-format export.
 
 ---
 
-## 2. Repository layout (what matters today)
+## 2. Repository Layout
 
 | Path | Role |
 |------|------|
-| `instrumented-app/` | Runnable Spring Boot app: demo API + tracing + REST + WS |
-| `frontend/` | Vite + React UI with configurable WebSocket URL |
-| `PROJECT_DOCUMENTATION.md` | Full feature and API inventory |
-| `docs/FEATURES.md` | **Complete feature list with all capabilities** |
-| `docs/ARCHITECTURE.md` | Diagrams (Mermaid): context, sequence, components |
-| `docs/PORTFOLIO_RESUME_VERSION.md` | Short narrative for resumes / portfolio |
-| `.github/workflows/ci.yml` | **CI/CD pipeline for automated testing** |
+| `instrumented-app/` | Runnable Spring Boot app: demo API + tracing + REST + WebSocket |
+| `frontend/` | Vite + React dashboard with configurable WebSocket URL |
+| `PROJECT_DOCUMENTATION.md` | Full technical inventory, API reference, architecture |
+| `docs/FEATURES.md` | Complete feature checklist |
+| `docs/ARCHITECTURE.md` | Mermaid diagrams: context, sequence, components, frontend pipeline |
+| `docs/PORTFOLIO_RESUME_VERSION.md` | Resume narrative, interview talking points |
+| `.github/workflows/ci.yml` | CI/CD pipeline: backend tests + frontend build |
 | `shared-model/`, `trace-collector/` | Present in tree; **not** active multi-module pipeline in current code |
 
 ---
 
-## 3. End-to-end sequence (happy path)
-
-This matches runtime behavior for a typical `GET /users/{id}`.
+## 3. End-to-End Sequence (Happy Path)
 
 ```mermaid
 sequenceDiagram
@@ -38,18 +36,20 @@ sequenceDiagram
     participant A as TraceAspect
     participant E as TraceEvent
     participant Col as InMemoryTraceCollector
+    participant Alert as TraceAlertService
     participant W as TraceWebSocketHandler
-    participant U as React App
+    participant U as React Dashboard
 
     C->>F: GET /users/2
     F->>F: UUID → MDC["requestId"]
     F->>H: dispatch
 
-    Note over H,A: Each proxied method entry/exit wrapped by AOP
+    Note over H,A: Each proxied method entry/exit wrapped by @Around AOP
 
-    H->>A: around advice (push stack, proceed, pop)
-    A->>E: build event (parent from TraceStack)
-    A->>Col: addEvent (tree + heuristics + critical path)
+    H->>A: around advice (push spanId, proceed, pop)
+    A->>E: build event (parent from TraceStack, CPU, source, errors)
+    A->>Col: addEvent (tree + heuristics + critical path + sampling)
+    Col->>Alert: evaluate rules → fire alerts if triggered
     A->>W: broadcast JSON
 
     W-->>U: WebSocket message
@@ -58,71 +58,121 @@ sequenceDiagram
 
 ---
 
-## 4. Key backend contracts
+## 4. Key Backend Contracts
 
-### 4.1 `TraceEvent` (wire format to UI)
+### 4.1 `TraceEvent` (Wire Format to UI)
 
-Emitted as JSON over WebSocket and used by the UI as plain objects. Important fields:
+Emitted as JSON over WebSocket. Critical fields:
 
-- **Identity**: `eventId`, `requestId`, **`spanId`**, **`parentSpanId`** (UUID-based stable identifiers)
-- **Call graph**: `method`, `parentMethod` (fallback for backward compatibility)
-  - **Primary linkage**: Uses `spanId`/`parentSpanId` for stable parent-child relationships
-  - **Fallback**: `parentMethod` string matching for legacy support
-- **Timing**: `timestamp`, `executionTimeMs`
-- **Payload**: `params`, `returnValue` (with **optional redaction** for sensitive data)
-- **Errors**: `status` (`SUCCESS` / `ERROR`), `errorType`, `errorMessage`, `errorStackTrace`
-- **Diagnostics**: `sourceFile`, `sourceLine` (from AspectJ SourceLocation), `threadName`, `threadState`, **`threadCpuTimeMs`** (actual CPU time via ThreadMXBean)
-- **Event type**: `eventType` (METHOD, SQL, etc.)
+**Identity & linkage:**
+- `eventId` — UUID per event
+- `spanId` — UUID per method invocation; **primary tree linkage key**
+- `parentSpanId` — UUID of parent; used by `buildTracesFromEvents` in frontend
+- `requestId` — HTTP request correlation ID
 
-### 4.2 In-memory tree (`CallTreeNode`)
+**Call data:**
+- `method` / `methodName` — fully-qualified method signature
+- `params` / `returnValue` — captured with redaction applied
+- `executionTimeMs` — wall-clock duration
+- `threadCpuTimeMs` — actual CPU time via `ThreadMXBean`
+- `threadName` / `threadState` — OS thread name + JVM state
+- `timestamp` — ISO-8601 invocation start
+- `eventType` — `METHOD` or `SQL`
 
-Used by:
+**Risk flags (set by `InMemoryTraceCollector`):**
+- `slowPath`, `isOnCriticalPath`, `contentionRisk`, `resourceLeakSuspicion`, `logicGapRisk`
 
+**Error details:**
+- `status` (`SUCCESS` / `ERROR`), `errorType`, `errorMessage`, `errorStackTrace`
+
+**SQL-specific:**
+- `sql` — query text
+- `slowQuery` — boolean (≥500ms)
+
+### 4.2 In-Memory Tree (`CallTreeNode`)
+
+Built by `InMemoryTraceCollector` using `spanId`/`parentSpanId` for stable linkage. Used by:
 - `GET /traces/{requestId}/json`
-- `analyzeTrace`, `diffTraces`
+- `analyzeTrace`, `diffTraces`, metrics, search, alerts
 
-Collector also sets flags like `slowPath`, `hasError`, `isOnCriticalPath`, and heuristic "risk" booleans—some are **best-effort string heuristics**, not formal static analysis.
+Flags set per node: `slowPath`, `hasError`, `isOnCriticalPath`, `contentionRisk`, `resourceLeakSuspicion`, `logicGapRisk` — these are **best-effort heuristics**, not formal static analysis.
 
-**New in current version**:
-- **Memory management**: Configurable max traces (LRU eviction) + TTL-based cleanup
-- **Sampling**: "all", "slow" (>500ms), or percentage-based (e.g., "10" for 10%)
-- **Span-based linkage**: Uses `spanId`/`parentSpanId` for reliable tree construction
+**Production features:**
+- **Sampling**: `all`, `slow` (>500ms), percentage (e.g. `"10"`)
+- **LRU eviction**: drops oldest trace when `max-traces` exceeded
+- **TTL cleanup**: background thread removes traces older than `ttl-seconds`
 
-### 4.3 REST surface (`TraceReplayController`)
+### 4.3 Full REST Surface
 
-Documented in `PROJECT_DOCUMENTATION.md`. Onboarding tip: use **`/traces/{id}/json`** for debugging tree shape; use **`/analysis`** for aggregated warnings.
+See [PROJECT_DOCUMENTATION.md §3.4](../PROJECT_DOCUMENTATION.md) for the complete table. Most-used endpoints during development:
 
----
-
-## 5. Frontend mental model
-
-### 5.1 Why `eventsByRequest` exists
-
-WebSocket events can arrive **out of order** relative to ideal parent insertion. The UI stores **raw events per request** and **`buildTracesFromEvents`** rebuilds the tree (sorted by timestamp) so parent nodes exist before children attach.
-
-### 5.2 View layers
-
-- **Tree** (`TraceTree.jsx`): D3 `tree`, vertical layout, collapse, filter dimming, critical-path highlight (from frontend `computeMetrics` / event ids).
-- **Flame** (`FlameGraph.jsx`): stacked horizontal bars by depth; duration-scaled.
-- **Timeline** (`RequestTimeline.jsx`): zoom + drag pan over a time window.
-- **Compare**: second tree/flame + `buildTraceDiff` in UI + `OverlayTimeline` + backend `GET /traces/diff` (UI may not call REST diff yet—verify `App.jsx` if you unify sources).
-
-### 5.3 `ComparisonView.jsx`
-
-Exists as an alternate D3 compare layout; **not wired** into `App.jsx` at time of writing. Safe to delete or integrate—grep before removing.
+| Endpoint | When to use |
+|----------|-------------|
+| `/traces/{id}/json` | Inspect raw tree shape |
+| `/traces/{id}/analysis` | Check hints, N+1, anomalies |
+| `/traces/metrics/dashboard` | See p50/p95/p99 per method |
+| `/traces/search` | Find traces matching a criterion |
+| `/traces/alerts` | Check active alert list |
+| `/traces/diff` | Compare two traces |
 
 ---
 
-## 6. Local development
+## 5. Frontend Mental Model
+
+### 5.1 Why `eventsByRequest` Exists
+
+WebSocket events can arrive **out of order** relative to ideal parent insertion. The UI stores **raw events per request** and `buildTracesFromEvents` rebuilds the full tree (using `spanId`/`parentSpanId`) so every parent node exists before children attach. Never modify this pattern without understanding the ordering guarantee it provides.
+
+### 5.2 Hook Architecture
+
+Three custom hooks own all server interaction — `App.jsx` just receives data and passes it to components:
+
+- **`useTraceStream`** — WebSocket lifecycle, `eventsByRequest` state, pause/resume, `latestEvent` for animations
+- **`useSearchAndMetrics`** — polls `/metrics/dashboard`, `/alerts`, `/history`; debounces `/search` on criteria changes
+- **`useComparisonState`** — fetches `/traces/diff` when compare request is selected
+
+### 5.3 Component Responsibilities (Quick Map)
+
+| Component | One-line role |
+|-----------|---------------|
+| `KpiBar` | 4 headline health cards (Traces / Error Rate / p99 / Alerts) |
+| `AlertRail` | Collapsible alert banner with per-alert dismiss |
+| `ExportDropdown` | Single menu replacing 4 export links + share link |
+| `TraceTree` | D3 force-graph; collapse, filter, particle animation |
+| `FlameGraph` | Click-to-zoom with hotspot sidebar and risk chips |
+| `RequestTimeline` | Thread swimlane; zoom/pan; colour-coded spans |
+| `NodeDetailPanel` | Info / Params / Stack Trace / SQL tabs per node |
+| `CodePreview` | Inline Java source viewer; shown from NodeDetailPanel Info tab when `sourceFile`/`sourceLine` are present; fetches `GET /traces/source`; syntax-highlights Java |
+| `SqlInspector` | N+1 detection; queries grouped; per-call timing chips |
+| `MetricsDashboard` | p50/p95/p99 sparkbars + anomaly callout |
+| `ComparisonSection` | Diff table + side-by-side trees + overlay timeline |
+| `AnalysisBanner` | Root-cause hints, N+1 warnings, anomalies above fold |
+
+### 5.4 Health Grade Computation
+
+Per-request A–F score in `App.jsx` (`computeHealthGrade`):
+
+```
+score = 100
+- min(errors × 15, 40)
+- min(contention × 8, 20)
+- min(slowSpans × 6, 20)
+- 15 if totalMs > 2000, else 8 if totalMs > 500
+
+A ≥ 90 · B ≥ 75 · C ≥ 60 · D ≥ 40 · F < 40
+```
+
+---
+
+## 6. Local Development
 
 ### Backend
 
 ```bash
 cd instrumented-app
 ./gradlew bootRun
+# Default: http://localhost:8080
 ```
-
-Default: `http://localhost:8080`
 
 ### Frontend
 
@@ -130,37 +180,41 @@ Default: `http://localhost:8080`
 cd frontend
 npm install
 npm run dev
+# Default: http://localhost:5173
 ```
 
-Vite port: see `frontend/vite.config.js` (default **5173**, configurable via `VITE_PORT`).
-
-### WebSocket URL & Auth Configuration
-
-**Configurable via `.env` file**:
+### WebSocket URL & Auth
 
 1. Copy `frontend/.env.example` to `frontend/.env`
-2. Set `VITE_WS_URL` or `VITE_API_URL`:
+2. Set either:
    ```bash
-   # Option 1: Direct WebSocket URL
-   VITE_WS_URL=ws://localhost:8080/ws/traces
-
-   # Option 2: API URL (WebSocket URL derived)
-   VITE_API_URL=http://localhost:8080
+   VITE_API_URL=http://localhost:8080        # WebSocket URL derived automatically
+   # or
+   VITE_WS_URL=ws://localhost:8080/ws/traces # Explicit WebSocket URL
    ```
-3. (Optional) Enable auth by matching `VITE_WS_TOKEN` to `trace.websocket.auth-token`:
+3. Optional auth (must match backend `trace.websocket.auth-token`):
    ```bash
    VITE_WS_TOKEN=your-strong-secret
    ```
 
-Default fallback URL: `ws://localhost:8080/ws/traces`. Auth is disabled by default.
+Default fallback: `ws://localhost:8080/ws/traces`. Auth is disabled by default.
 
-**Auto-reconnect** is built in — the client retries with exponential backoff (1 s → 30 s cap) on any unexpected close.
+**Auto-reconnect** — exponential backoff 1 s → 2 s → 4 s → … capped at 30 s.
+
+### Trigger Sample Traces
+
+```bash
+curl http://localhost:8080/users/2
+curl http://localhost:8080/orders/1001/fulfillment
+```
+
+Or use the sample buttons in the frontend empty state.
 
 ---
 
 ## 7. Configuration & Production Readiness
 
-### 7.1 Backend Configuration (`application.yml`)
+### Backend (`application.yml`)
 
 ```yaml
 trace:
@@ -171,103 +225,170 @@ trace:
   redaction:
     enabled: true           # Redact passwords, tokens, PII
   websocket:
-    allowed-origins: "http://localhost:3000,http://localhost:5173"
+    allowed-origins: "http://localhost:5173"
     auth-token: "none"      # "none" = auth disabled; set a secret to protect the WS endpoint
 ```
 
-**Production recommendations**:
-- Set `sampling: slow` or percentage (e.g., `"10"`) to reduce overhead
-- Lower `max-traces` to 500 or less for memory efficiency
-- Reduce `ttl-seconds` to 1800 (30 minutes) or less
-- **Always** enable `redaction.enabled: true`
-- Set `auth-token` to a strong random string and supply `VITE_WS_TOKEN` on the frontend
-- Set `allowed-origins` to your actual frontend domain(s)
+**Production recommendations:**
+- `sampling: slow` or percentage — reduce overhead
+- `max-traces: 500`, `ttl-seconds: 1800` — lower memory footprint
+- `redaction.enabled: true` — always on in production
+- `auth-token` — set to a strong random string; supply `VITE_WS_TOKEN` on the frontend
+- `allowed-origins` — restrict to your actual frontend domain(s)
 
-### 7.2 Security Notes
+### Security Checklist
 
-- **✅ CORS / origins**: Configurable via `trace.websocket.allowed-origins` — **must** be set for production
-- **✅ PII / secrets**: Automatic redaction enabled by default — detects passwords, tokens, API keys, long hex/base64 strings
-- **✅ WebSocket auth**: `WebSocketAuthInterceptor` rejects upgrades with wrong/missing `?token=` — disabled by default, one config line to enable
-- **✅ Memory**: TTL + LRU eviction prevents unbounded growth
-- **⚠️ Concurrency**: `TraceStack` is per-thread; async hops (`@Async`, reactive) require additional propagation work
+| Control | Status | Notes |
+|---------|--------|-------|
+| CORS origins | ✅ Configurable | Must be set for production |
+| PII redaction | ✅ On by default | Detects passwords, tokens, API keys, long hex/base64 |
+| WebSocket auth | ✅ Opt-in | `HandshakeInterceptor` rejects wrong/missing token with 401 |
+| Memory bounds | ✅ LRU + TTL | Prevents unbounded growth |
+| Replay safety | ✅ No execution | Replay endpoint returns instructions only |
+| Async propagation | ⚠️ Partial | `@Async` / `CompletableFuture` supported; WebFlux not yet |
 
-### 7.3 Testing
+---
 
-#### Backend
+## 8. Testing
+
+### Backend
+
 ```bash
-cd instrumented-app
-./gradlew test
+cd instrumented-app && ./gradlew test
 ```
-Covers: call tree building, span IDs, diff logic, redaction, concurrent access, WebSocket broadcasting.
 
-#### Frontend
+Covers: call tree building, span IDs, diff logic, redaction, concurrency, OTel export, search.
+
+### Frontend
+
 ```bash
-cd frontend
-npm test
+cd frontend && npm test
 ```
-17 Vitest tests covering `computeMetrics`, `flattenEvents`, `buildTracesFromEvents`, `extractClassNameFromMethod` in [`traceUtils.js`](../frontend/src/services/traceUtils.js).
 
-**CI/CD**: GitHub Actions workflow runs both suites automatically on push/PR.
+17 Vitest tests for all `traceUtils.js` functions.
 
----
+### Build Validation
 
-## 8. What's New (Latest Improvements)
+```bash
+cd frontend && npm run build
+```
 
-### ✅ Implemented (Round 1)
-1. **✅ Stable span IDs**: `spanId` / `parentSpanId` (UUID-based) for reliable parent-child linkage
-2. **✅ Sampling**: Configurable "all", "slow", or percentage-based sampling
-3. **✅ Memory management**: TTL + LRU eviction with configurable limits
-4. **✅ CPU time tracking**: Real `ThreadMXBean` integration — cached as field, not per-call lookup
-5. **✅ Source metadata**: AspectJ SourceLocation for accurate file/line info
-6. **✅ Sensitive data redaction**: Pattern-based PII/credential detection
-7. **✅ Configurable WebSocket URL**: Frontend `.env` support
-8. **✅ CORS configuration**: Production-ready origin restrictions
-9. **✅ SQL tracing**: JDBC wrapper for query capture
-10. **✅ Safe replay endpoint**: Documentation-only (no arbitrary execution)
-11. **✅ Comprehensive backend tests**: Unit + integration + concurrency tests
-12. **✅ CI/CD pipeline**: GitHub Actions for automated testing
-
-### ✅ Implemented (Round 2)
-13. **✅ WebSocket auto-reconnect**: Exponential backoff in `websocket.js` (1 s → 30 s cap)
-14. **✅ `TraceEvent` builder**: Lombok `@Builder` replaces fragile 22-argument constructors
-15. **✅ Frontend logic extraction**: `traceUtils.js` separates pure functions from `App.jsx`
-16. **✅ Frontend unit tests**: 17 Vitest tests for all utility functions
-17. **✅ WebSocket authentication**: `WebSocketAuthInterceptor` — opt-in shared-secret token guard
-
-### 🔄 Future Extensions
-1. **Persistence**: Write events to DB/object storage for long-term retention
-2. **Distributed tracing**: Full cross-service span merging (partial implementation exists)
-3. **Reactive support**: Reactor Context propagation for WebFlux
-4. **Advanced analytics**: Historical trends, custom alerts, anomaly detection
+CI runs all of the above automatically on every push and PR.
 
 ---
 
-## 9. Diagram index
+## 9. What's Been Built (Chronological Summary)
 
-| Diagram | Location |
-|---------|----------|
-| System context | [ARCHITECTURE.md §1](./ARCHITECTURE.md#1-system-context) |
-| Request trace pipeline (sequence) | [ARCHITECTURE.md §2](./ARCHITECTURE.md#2-request-scoped-trace-pipeline-logical) |
-| Backend components | [ARCHITECTURE.md §3](./ARCHITECTURE.md#3-backend-component-map) |
-| Frontend pipeline | [ARCHITECTURE.md §4](./ARCHITECTURE.md#4-frontend-data-flow) |
-| Local deployment | [ARCHITECTURE.md §5](./ARCHITECTURE.md#5-deployment-view-local-dev) |
+### GlobalExceptionHandler
+- `@RestControllerAdvice` in `com.example.tracer.config`
+- Catches `Exception`, `IllegalArgumentException`, and `NullPointerException` before Spring's default error handler
+- All responses include `requestId` from MDC — lets you correlate a 500 in the browser with the exact trace that caused it
+- Does **not** catch errors from the WebSocket handler (that path bypasses MVC)
+
+### ReactorTraceContextConfig / ReactorTraceContextAccessor
+- `ReactorTraceContextConfig.captureContext()` snapshots the current `TraceStack` parent + MDC map into a Reactor `Context`
+- `wrap(Mono)` / `wrap(Flux)` writes that context into the chain and restores it before each operator signal, then clears ThreadLocals on `doFinally`
+- `ReactorTraceContextAccessor` is a Spring `@Component` wrapping the static helpers — inject it or call `ReactorTraceContextAccessor.withTraceContext(mono)` from any bean
+- **Not yet wired into the demo app.** Intended entry point for future WebFlux endpoint tracing
+
+### Round 1 — Core tracing infrastructure
+Stable span IDs, sampling, LRU+TTL memory management, CPU time (ThreadMXBean), AspectJ source metadata, PII redaction, configurable WebSocket URL, CORS configuration, SQL tracing, safe replay endpoint, backend test suite, GitHub Actions CI.
+
+### Round 2 — Observability depth
+WebSocket auto-reconnect (exponential backoff), Lombok `@Builder` for `TraceEvent`, `traceUtils.js` extraction, 17 Vitest frontend tests, WebSocket shared-secret auth, distributed trace header propagation, async context propagation, N+1 detection, OTel export, persistence + share links, metrics dashboard (p50/p95/p99), root-cause analyzer, alert engine, trace search, trace history.
+
+### Round 3 — Professional dashboard UI
+KPI Summary Bar (4 headline health cards), sidebar tab navigation (Requests / Search / Stats), per-request health grades (A–F), Alert Notification Rail (collapsible, per-alert dismiss, severity-coded), method metrics sparkbars (3-layer p50/p95/p99 bars), Export Dropdown (JSON/SVG/PDF/OTEL/Share in one menu), SQL Query Inspector (N+1 grouping, per-call timing chips), SQL tab in NodeDetailPanel, bookmark persistence to `localStorage`, events/sec rolling counter in header, full empty state with 6-card feature overview.
 
 ---
 
-## 10. Glossary
+## 10. Known Gaps
+
+| Area | Notes |
+|------|-------|
+| WebFlux / Reactor | Not implemented |
+| Cross-service span merging | Infrastructure exists; merge logic incomplete |
+| File-based persistence | Single-instance only; no DB/object storage |
+| Alert acknowledgement API | Alerts accumulate until page refresh |
+| Time-series latency | Metrics endpoint returns aggregate snapshot only |
+| Accessibility | Minimal; not hardened for screen readers or keyboard-only navigation |
+
+---
+
+## 11. Extension Playbook
+
+### Add a new REST endpoint
+
+1. Add handler to `TraceReplayController` or a new `@RestController`
+2. Call into `InMemoryTraceCollector` for trace data
+3. Add client function to `frontend/src/services/traceApi.js`
+4. Wire into the relevant hook (`useSearchAndMetrics` for polling, `useComparisonState` for diff-style)
+
+### Add a new frontend component
+
+1. Create `frontend/src/components/MyComponent.jsx`
+2. Use `COLORS` from `../theme.jsx` for consistent styling
+3. Import and place in `App.jsx`
+4. No CSS files needed — all styles are inline (exception: `CodePreview.jsx` uses `CodePreview.css` for its scoped syntax-highlight styles)
+
+### Add a new error response field
+
+1. Add the field to the `errorResponse` map in `GlobalExceptionHandler`
+2. If it requires request-scoped data (e.g. current trace ID), read it from MDC or `TraceStack` — both are available in the handler thread
+3. No frontend changes needed unless you want to display the field
+
+### Add a new risk flag
+
+1. Compute the flag in `InMemoryTraceCollector` and set it on `CallTreeNode`
+2. Add the field to `TraceEvent` builder
+3. Add a new `Badge` entry in `RiskBadges` in `theme.jsx`
+4. Colour-code it in `TraceTree.jsx` (`nodeFill`, `nodeRingColor`) and `RequestTimeline.jsx` (`spanColor`)
+
+---
+
+## 12. Glossary
 
 | Term | Meaning |
 |------|---------|
 | `requestId` | UUID per HTTP request; carried in MDC and every `TraceEvent` |
-| `spanId` | UUID per method invocation; stable identifier for tree linkage |
-| `parentSpanId` | UUID of parent span; enables reliable parent-child relationships |
+| `spanId` | UUID per method invocation; primary tree linkage identifier |
+| `parentSpanId` | UUID of parent span; enables reliable parent-child tree construction |
 | `TraceStack` | ThreadLocal deque mirroring traced call depth for parent resolution |
 | `TraceEvent` | Immutable record of one method invocation; built via Lombok `@Builder` |
-| Critical path | Longest cumulative duration path in collector's tree heuristic |
-| Flame graph (here) | Time-width stacked visualization; not identical to kernel flame graphs but same idea |
-| Sampling | Selective trace capture: "all", "slow" (>500ms), or percentage-based |
-| Redaction | Automatic removal of sensitive data (passwords, tokens, PII) from traces |
-| TTL | Time-to-live: automatic cleanup of traces older than configured duration |
+| Critical path | Longest cumulative duration path in collector's tree |
+| Flame graph | Time-width stacked visualization; click-to-zoom; hotspot ranking |
+| Sampling | `all` / `slow` (>500ms) / percentage — selective trace capture |
+| Redaction | Automatic removal of sensitive data from params/return values |
+| TTL | Time-to-live — automatic cleanup of traces older than configured duration |
 | LRU eviction | Least-recently-used removal when max trace count exceeded |
-| WS auth token | Shared secret checked by `WebSocketAuthInterceptor` on each upgrade handshake |
-| `traceUtils.js` | Pure JS module with `computeMetrics`, `flattenEvents`, `buildTracesFromEvents`, `extractClassNameFromMethod` |
+| WS auth token | Shared secret checked by `WebSocketAuthInterceptor` on handshake |
+| Health grade | A–F score computed per request from errors, latency, contention |
+| KPI bar | Four headline health cards pinned below the dashboard header |
+| Alert rail | Collapsible notification banner at top of main panel |
+| Sparkbar | Three-layer latency bar (p50/p95/p99) in the metrics stats table |
+| `traceUtils.js` | Pure JS module — `computeMetrics`, `flattenEvents`, `buildTracesFromEvents`, `extractClassNameFromMethod` |
+
+---
+
+## 13. Diagram Index
+
+| Diagram | Location |
+|---------|----------|
+| System context | [ARCHITECTURE.md §1](./ARCHITECTURE.md#1-system-context) |
+| Request trace pipeline | [ARCHITECTURE.md §2](./ARCHITECTURE.md#2-request-scoped-trace-pipeline) |
+| Backend component map | [ARCHITECTURE.md §3](./ARCHITECTURE.md#3-backend-component-map) |
+| Frontend data flow | [ARCHITECTURE.md §4](./ARCHITECTURE.md#4-frontend-data-flow) |
+| Frontend component tree | [ARCHITECTURE.md §5](./ARCHITECTURE.md#5-frontend-component-tree) |
+| Local deployment | [ARCHITECTURE.md §6](./ARCHITECTURE.md#6-deployment-view-local-dev) |
+
+---
+
+## 14. Related Docs
+
+| Document | Contents |
+|----------|----------|
+| [PROJECT_DOCUMENTATION.md](../PROJECT_DOCUMENTATION.md) | Full technical inventory, component reference |
+| [API_REFERENCE.md](./API_REFERENCE.md) | Complete REST + WebSocket contract |
+| [FEATURES.md](./FEATURES.md) | Full feature checklist |
+| [PORTFOLIO_RESUME_VERSION.md](./PORTFOLIO_RESUME_VERSION.md) | Resume bullets and interview talking points |
+| [IMPLEMENTATION_SUMMARY.md](../IMPLEMENTATION_SUMMARY.md) | Chronological build history |

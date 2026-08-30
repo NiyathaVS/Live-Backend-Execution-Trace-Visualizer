@@ -1,48 +1,52 @@
 # Architecture
 
-This document is the canonical reference for **system structure** and **data flow**. Diagrams use [Mermaid](https://mermaid.js.org/) syntax (rendered on GitHub, GitLab, many IDEs, and Markdown preview tools).
+Canonical reference for **system structure** and **data flow**. All diagrams use [Mermaid](https://mermaid.js.org/) syntax (rendered on GitHub, GitLab, most IDEs).
 
 ---
 
-## 1. System context
+## 1. System Context
 
 High-level view: who talks to whom.
 
 ```mermaid
 flowchart LR
     subgraph Clients
-        Browser["Browser / React UI"]
+        Browser["Browser / React Dashboard"]
         Curl["curl / API clients"]
     end
 
-    subgraph InstrumentedApp["instrumented-app (Spring Boot)"]
-        HTTP["HTTP Controllers"]
+    subgraph InstrumentedApp["instrumented-app (Spring Boot :8080)"]
+        HTTP["HTTP Controllers\n/users  /orders"]
         AOP["TraceAspect (AOP)"]
-        Collector["InMemoryTraceCollector"]
+        Collector["InMemoryTraceCollector\n+ AnalysisEngine"]
         WS["TraceWebSocketHandler\n/ws/traces"]
-        REST["TraceReplayController\n/traces/*"]
+        REST["REST APIs\n/traces/*"]
+        Alerts["TraceAlertService"]
+        Metrics["MetricsDashboard\n/traces/metrics/dashboard"]
     end
 
     Curl --> HTTP
-    Browser -->|"HTTP (optional)"| HTTP
-    Browser <-->|"WebSocket\nws://host:8080/ws/traces"| WS
+    Browser -->|"HTTP (sample calls)"| HTTP
+    Browser <-->|"WebSocket — live events"| WS
+    Browser -->|"REST — metrics, search, alerts, export"| REST
 
     HTTP --> AOP
     AOP --> Collector
     AOP --> WS
-    REST --> Collector
+    Collector --> REST
+    Collector --> Alerts
+    Collector --> Metrics
 ```
 
 **Notes**
-
-- The UI primarily consumes **WebSocket** events; HTTP to the app is used to **generate** traces (e.g. `GET /users/{id}`) and optional **REST** inspection (`/traces/...`).
-- `shared-model` and `trace-collector` in the repo are placeholders for a future split (not separate deployables in the current codebase).
+- The dashboard primarily consumes **WebSocket** events (live trace stream) and **REST** endpoints (metrics, search, alerts, exports).
+- The HTTP endpoints (`/users`, `/orders`) exist purely as instrumented demo surfaces to generate interesting traces.
 
 ---
 
-## 2. Request-scoped trace pipeline (logical)
+## 2. Request-Scoped Trace Pipeline
 
-Single HTTP request: correlation, stack, emission.
+Single HTTP request: correlation → stack → emission → dashboard.
 
 ```mermaid
 sequenceDiagram
@@ -52,28 +56,34 @@ sequenceDiagram
     participant Stack as TraceStack (ThreadLocal)
     participant Aspect as TraceAspect
     participant App as Controller / Service / Repository
-    participant Pub as ConsoleTraceEventPublisher
+    participant SQL as TracingDataSource (JDBC)
     participant Col as InMemoryTraceCollector
+    participant Alert as TraceAlertService
     participant WS as TraceWebSocketHandler
-    participant UI as React Frontend
+    participant UI as React Dashboard
 
     Client->>Filter: HTTP request
     Filter->>MDC: put(requestId)
     Filter->>Stack: clear (start clean)
     Filter->>App: filterChain.doFilter
 
-    loop Each traced method (@Around)
-        Aspect->>Stack: peek parent
-        Aspect->>Stack: push current method
+    loop Each traced method (@Around AOP)
+        Aspect->>Stack: peek parent spanId
+        Aspect->>Stack: push current spanId
         Aspect->>App: proceed()
         App-->>Aspect: return / throw
         Aspect->>Stack: pop
-        Aspect->>Aspect: build TraceEvent
-        Aspect->>Pub: publish(event)
-        Aspect->>Col: addEvent(event)
-        Aspect->>WS: broadcastEvent(event)
+        Aspect->>Aspect: build TraceEvent (timing, CPU, source, errors)
+        Aspect->>Col: addEvent → build tree, set risk flags, critical path
+        Aspect->>WS: broadcastEvent → all connected sessions
     end
 
+    loop Each SQL query
+        SQL->>Col: addEvent (eventType=SQL, query text, duration)
+        SQL->>WS: broadcastEvent
+    end
+
+    Col->>Alert: evaluate rules → fire alerts
     WS-->>UI: JSON TraceEvent (live)
 
     Filter->>MDC: remove(requestId)
@@ -82,92 +92,178 @@ sequenceDiagram
 
 ---
 
-## 3. Backend component map
-
-Inside `instrumented-app`.
+## 3. Backend Component Map
 
 ```mermaid
 flowchart TB
     subgraph Config
-        TC[TraceConfiguration\nBeans: publisher, collector, ws handler]
-        WSC[WebSocketConfig\nRegisters /ws/traces]
-        WAI[WebSocketAuthInterceptor\nHandshake token guard]
+        TC[TraceConfiguration\nbeans: publisher, collector, ws handler]
+        WSC[WebSocketConfig\n/ws/traces]
+        WAI[WebSocketAuthInterceptor\nshared-secret handshake guard]
+        ATC[AsyncTraceConfig\nTaskDecorator + traceAsyncExecutor]
+        GEH[GlobalExceptionHandler\nMDC-tagged JSON error responses]
+        RTC[ReactorTraceContextConfig\nMono/Flux context propagation]
     end
 
     subgraph Tracing
-        RF[RequestIdFilter]
-        TS[TraceStack / TraceContext]
-        TA[TraceAspect]
-        TE[TraceEvent]
-        TEP[TraceEventPublisher\nConsoleTraceEventPublisher]
-        IMTC[InMemoryTraceCollector]
-        TWH[TraceWebSocketHandler]
+        RF[RequestIdFilter\nUUID requestId → MDC]
+        TS[TraceStack + TraceContext\nThreadLocal call depth]
+        TA[TraceAspect\n@Around controller/service/repository]
+        TE[TraceEvent\nLombok @Builder]
+        IMTC[InMemoryTraceCollector\ntree + heuristics + LRU + TTL + sampling]
+        TWH[TraceWebSocketHandler\nbroadcast to all sessions]
+        SDR[SensitiveDataRedactor\nPII / token scrubbing]
+        TAS[TraceAlertService\nrule-based alert firing]
+        TRCA[TraceRootCauseAnalyzer\nhints + N+1 + anomalies]
+        MET[MetricsDashboard\np50/p95/p99 per method]
+        TPS[TracePersistenceService\nfile storage + share links]
+        TSS[TraceSearchService\nmethod / duration / error filter]
+        DSM[DistributedSpanMerger\ncross-service span merging]
+    end
+
+    subgraph Reactor
+        RTCA[ReactorTraceContextAccessor\nwithTraceContext(Mono/Flux)]
+    end
+
+    subgraph SQL
+        TDS[TracingDataSource]
+        TCN[TracingConnection]
+        TPS2[TracingPreparedStatement]
+        STL[SqlTraceListener]
     end
 
     subgraph API
-        UC[UserController\n/users]
-        TRC[TraceReplayController\n/traces]
+        UC[UserController /users]
+        OC[OrderController /orders]
+        TRC[TraceReplayController /traces/*]
     end
 
-    RF --> MDC[MDC requestId]
+    RF --> TS
     TA --> TS
     TA --> TE
-    TA --> TEP
+    TA --> SDR
     TA --> IMTC
     TA --> TWH
+    TDS --> TCN --> TPS2 --> STL
+    STL --> IMTC
+    STL --> TWH
+    IMTC --> TRCA
+    IMTC --> MET
+    IMTC --> TAS
+    TRC --> IMTC
+    TRC --> TPS
+    TRC --> TSS
     WSC --> TWH
     WSC --> WAI
-    WAI --> TWH
-    TRC --> IMTC
     UC --> TA
+    OC --> TA
 ```
 
 ---
 
-## 4. Frontend data flow
-
-From socket to trees and views.
+## 4. Frontend Data Flow
 
 ```mermaid
 flowchart LR
-    WS[WebSocket\n/ws/traces] --> Parse[JSON parse TraceEvent]
-    Parse --> Store["eventsByRequest\nmap requestId → events[]"]
-    Store --> Build["buildTracesFromEvents\n(traceUtils.js)"]
-    Build --> Views{Views}
+    WS[WebSocket\n/ws/traces] -->|live JSON events| Hook[useTraceStream\nhook]
+    REST_M[REST /traces/metrics/dashboard] -->|poll 15s| Hook2[useSearchAndMetrics\nhook]
+    REST_A[REST /traces/alerts] -->|poll 15s| Hook2
+    REST_S[REST /traces/search] -->|debounced| Hook2
+    REST_H[REST /traces/history] --> Hook2
+    REST_D[REST /traces/diff] --> Hook3[useComparisonState\nhook]
 
-    Views --> Tree[TraceTree\nD3 vertical tree]
-    Views --> Flame[FlameGraph]
-    Views --> TL[RequestTimeline\nzoom + pan]
-    Views --> Overlay[OverlayTimeline\ncompare]
-    Views --> Diff[Analytical diff\nin App.jsx]
+    Hook --> Store["eventsByRequest\nmap requestId → TraceEvent[]"]
+    Store --> Build["buildTracesFromEvents\n(traceUtils.js)"]
+
+    Build --> App[App.jsx\nstate orchestration]
+    Hook2 --> App
+    Hook3 --> App
+
+    App --> KPI[KpiBar\nheadline metrics]
+    App --> Sidebar[Sidebar Tabs\nRequests / Search / Stats]
+    App --> AlertRail[AlertRail\ncollapsible alert banner]
+    App --> Toolbar[Trace Toolbar\nchips + view toggle + ExportDropdown]
+
+    App --> Views{Active View}
+    Views --> Tree[TraceTree\nD3 force-graph]
+    Views --> Flame[FlameGraph\nclick-to-zoom]
+
+    App --> TL[RequestTimeline\nswim-lane zoom/pan]
+    App --> NDP[NodeDetailPanel\nInfo / Params / Stack / SQL tabs]
+    NDP --> CP[CodePreview\nJava source viewer]
+    App --> SQL[SqlInspector\nN+1 grouping]
+    App --> Comp[ComparisonSection\ndiff + overlay]
+    App --> Metrics[MetricsDashboard\nsparkbar table]
 ```
 
 ---
 
-## 5. Deployment view (local dev)
+## 5. Frontend Component Tree
 
-Typical developer setup.
+```
+App.jsx
+├── Header (live indicator + ev/s counter + alerts badge + pause/clear)
+├── KpiBar (Live Traces · Error Rate · Peak p99 · Active Alerts)
+├── Sidebar
+│   ├── Tab bar (Requests / Search / Stats)
+│   ├── [Requests] request list + filters + health badges + bookmarks
+│   ├── [Search]   method/duration/error filter + results + history
+│   └── [Stats]    MetricsDashboard (sparkbar table)
+└── Main
+    ├── AlertRail (collapsible, per-alert dismiss)
+    ├── Toolbar (request ID · summary chips · view toggle · compare · ExportDropdown)
+    ├── AnalysisBanner (root-cause hints, N+1 warnings, anomalies)
+    ├── TraceTree  OR  FlameGraph
+    ├── RequestTimeline (zoom/pan swimlane)
+    ├── NodeDetailPanel (Info / Params / Stack Trace / SQL tabs)
+    │   └── CodePreview (inline Java source viewer — shown when sourceFile + sourceLine available)
+    ├── SqlInspector (when SQL spans present)
+    └── ComparisonSection (when compare request selected)
+```
+
+---
+
+## 6. Deployment View (Local Dev)
 
 ```mermaid
 flowchart TB
     subgraph Machine
         B["instrumented-app\n:8080"]
-        F["Vite dev server\n:3000 (vite.config)"]
+        F["Vite dev server\n:5173"]
     end
 
     User[Developer] --> F
-    User --> B
-    F -->|"ws://localhost:8080/ws/traces"| B
+    User -->|"curl / Postman"| B
+    F <-->|"ws://localhost:8080/ws/traces"| B
+    F -->|"http://localhost:8080/traces/*"| B
 ```
 
-**Port reminder**: Backend defaults to **8080**. Frontend Vite defaults to **5173** (see `frontend/vite.config.js`).
+**Port reference:**
+- Backend: **8080** (Spring Boot default)
+- Frontend: **5173** (Vite default, configurable via `VITE_PORT`)
 
-**WebSocket auth**: the `WebSocketAuthInterceptor` sits between the client and `TraceWebSocketHandler`. With `auth-token: none` (default) it is a transparent pass-through. Set it to any non-`none` value and the interceptor returns HTTP 401 for upgrades missing or presenting the wrong `?token=` parameter.
+**WebSocket auth:** `WebSocketAuthInterceptor` is a transparent pass-through when `auth-token: none` (default). Set it to any non-`none` value and the interceptor rejects upgrades without a matching `?token=` query parameter.
 
 ---
 
-## Related docs
+## 7. Key Design Decisions
 
-- [PROJECT_DOCUMENTATION.md](../PROJECT_DOCUMENTATION.md) — full technical inventory
-- [ENGINEERING_ONBOARDING.md](./ENGINEERING_ONBOARDING.md) — team handoff and operations
+| Decision | Rationale |
+|----------|-----------|
+| `spanId` / `parentSpanId` for tree linkage | Eliminates ambiguity from duplicate method names; matches OpenTelemetry conventions |
+| Raw events stored, trees rebuilt client-side | Tolerates out-of-order WebSocket delivery without server-side ordering guarantees |
+| LRU + TTL dual eviction | Bounds memory by both count and age independently |
+| Heuristic risk flags | Best-effort signals (not formal static analysis) — cheap to compute, useful in practice |
+| Polling for metrics/alerts (not WebSocket) | Metrics are aggregate state, not event streams — REST polling is simpler and sufficient |
+| HTML-escape before syntax highlighting (`CodePreview`) | Java generics (`List<String>`) and other angle-bracket code would corrupt the DOM if injected raw; escaping first then wrapping with `<span>` keeps it safe |
+| `GlobalExceptionHandler` returns `requestId` | Lets engineers correlate an error response with the exact trace that produced it — no log search required |
+| Reactor context utilities shipped but not exercised | Provides the scaffolding for reactive tracing without forcing a WebFlux migration; ready to activate without architecture changes |
+
+---
+
+## Related Docs
+
+- [PROJECT_DOCUMENTATION.md](../PROJECT_DOCUMENTATION.md) — full technical inventory and API reference
+- [ENGINEERING_ONBOARDING.md](./ENGINEERING_ONBOARDING.md) — developer guide, glossary, extension playbook
+- [FEATURES.md](./FEATURES.md) — complete feature checklist
 - [PORTFOLIO_RESUME_VERSION.md](./PORTFOLIO_RESUME_VERSION.md) — resume / portfolio framing
