@@ -75,6 +75,24 @@ export async function fetchAlerts(requestId) {
     return res.json();
 }
 
+export async function acknowledgeAlert(alertId) {
+    const res = await fetch(
+        `${API_BASE}/traces/alerts/${encodeURIComponent(alertId)}/acknowledge`,
+        { method: "POST" }
+    );
+    if (!res.ok) throw new Error(`Acknowledge failed: ${res.status}`);
+    return res.json();
+}
+
+export async function fetchLatencyTimeseries(method) {
+    const url = method
+        ? `${API_BASE}/traces/metrics/timeseries?method=${encodeURIComponent(method)}`
+        : `${API_BASE}/traces/metrics/timeseries`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Timeseries fetch failed: ${res.status}`);
+    return res.json();
+}
+
 export function otelExportUrl(requestId) {
     return `${API_BASE}/traces/${encodeURIComponent(requestId)}/export/otel`;
 }

@@ -85,12 +85,13 @@ export default function FlameGraph({ data }) {
     const handleMouseLeave = useCallback(() => setHoveredBar(null), []);
 
     return (
-        <div style={{ width: "100%", fontFamily: "system-ui,sans-serif" }}>
+        <div style={{ width: "100%", fontFamily: "system-ui,sans-serif", display: "flex", flexDirection: "column", height: "100%", minHeight: 380 }}>
             {/* ── toolbar / breadcrumb ─────────────────────────────────── */}
             <div style={{
                 display: "flex", alignItems: "center", gap: 6,
                 padding: "8px 12px", borderBottom: "1px solid rgba(55,65,81,0.5)",
                 background: "rgba(13,21,39,0.8)", flexWrap: "wrap",
+                flexShrink: 0,
             }}>
                 <span style={{ fontSize: 11, color: "#64748b", marginRight: 4 }}>
                     {zoomNode ? "Zoomed:" : "Flame chart"} •
@@ -113,11 +114,11 @@ export default function FlameGraph({ data }) {
                 </span>
             </div>
 
-            <div style={{ display: "flex", gap: 0 }}>
+            <div style={{ display: "flex", gap: 0, flex: 1, overflow: "hidden", minHeight: 0 }}>
                 {/* ── main chart ─────────────────────────────────────────── */}
                 <div
                     ref={containerRef}
-                    style={{ flex: 1, position: "relative", overflowX: "hidden", overflowY: "auto" }}
+                    style={{ flex: 1, position: "relative", overflow: "auto" }}
                     onMouseLeave={handleMouseLeave}
                 >
                     <svg

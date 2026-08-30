@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { fetchMetricsDashboard, searchTraces, fetchTraceHistory, fetchAlerts } from "../services/traceApi";
+import { fetchMetricsDashboard, searchTraces, fetchTraceHistory, fetchAlerts, fetchLatencyTimeseries } from "../services/traceApi";
 
 /**
- * Handles all server-side search, metrics, history, and alert polling.
+ * Handles all server-side search, metrics, history, alert polling, and latency timeseries.
  */
 export function useSearchAndMetrics(eventsByRequest, selectedRequestId, searchCriteria) {
     const { method, minMs, errorsOnly } = searchCriteria;
@@ -14,6 +14,7 @@ export function useSearchAndMetrics(eventsByRequest, selectedRequestId, searchCr
     const [searchError, setSearchError] = useState(null);
     const [historyTraces, setHistoryTraces] = useState([]);
     const [alerts, setAlerts] = useState([]);
+    const [latencyTimeseries, setLatencyTimeseries] = useState({});
 
     // Metrics — poll every 15 s whenever traces change
     useEffect(() => {
@@ -82,5 +83,18 @@ export function useSearchAndMetrics(eventsByRequest, selectedRequestId, searchCr
         return () => { cancelled = true; clearInterval(interval); };
     }, [selectedRequestId, eventsByRequest]);
 
-    return { metricsReport, metricsLoading, metricsError, searchResults, searchError, historyTraces, alerts };
+    // Latency timeseries — poll every 20 s
+    useEffect(() => {
+        let cancelled = false;
+        const load = () => {
+            fetchLatencyTimeseries()
+                .then((data) => { if (!cancelled) setLatencyTimeseries(data || {}); })
+                .catch(() => {});
+        };
+        load();
+        const interval = setInterval(load, 20000);
+        return () => { cancelled = true; clearInterval(interval); };
+    }, [eventsByRequest]);
+
+    return { metricsReport, metricsLoading, metricsError, searchResults, searchError, historyTraces, alerts, latencyTimeseries };
 }
