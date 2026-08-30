@@ -635,6 +635,11 @@ public class InMemoryTraceCollector {
         final List<Long> durations = new ArrayList<>();
     }
 
+    /** Returns a snapshot of rolling per-method durations (up to 200 recent samples each). */
+    public Map<String, List<Long>> getMethodDurationHistory() {
+        return new HashMap<>(methodDurationHistory);
+    }
+
     public List<String> listRequestIds() {
         lock.readLock().lock();
         try {

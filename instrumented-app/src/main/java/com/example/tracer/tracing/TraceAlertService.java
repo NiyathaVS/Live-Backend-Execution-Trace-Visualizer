@@ -5,9 +5,14 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Evaluates configurable alert rules against in-memory traces.
+ * Alerts can be individually acknowledged; acknowledged alerts are suppressed
+ * until the underlying condition changes (requestId+rule combination resets
+ * if the same trace fires the same rule again after the server restarts).
  */
 @Service
 public class TraceAlertService {
@@ -16,6 +21,9 @@ public class TraceAlertService {
     private final long slowRequestThresholdMs;
     private final int maxErrorNodes;
     private final double errorRateThreshold;
+
+    /** Set of acknowledged alert IDs ({requestId}::{rule}). */
+    private final Set<String> acknowledged = ConcurrentHashMap.newKeySet();
 
     public TraceAlertService(
             InMemoryTraceCollector collector,
@@ -26,6 +34,11 @@ public class TraceAlertService {
         this.slowRequestThresholdMs = slowRequestThresholdMs;
         this.maxErrorNodes = maxErrorNodes;
         this.errorRateThreshold = errorRateThreshold;
+    }
+
+    /** Acknowledge an alert by its composite id ({requestId}::{rule}). Returns true if it existed. */
+    public boolean acknowledge(String alertId) {
+        return acknowledged.add(alertId);
     }
 
     public List<TraceAlert> evaluateAll() {
@@ -49,46 +62,38 @@ public class TraceAlertService {
         long totalDuration = root.getChildren().stream().mapToLong(CallTreeNode::getExecutionTime).sum();
 
         if (totalDuration >= slowRequestThresholdMs) {
-            alerts.add(new TraceAlert(
-                    requestId,
-                    "SLOW_REQUEST",
-                    "WARN",
-                    "Request duration " + totalDuration + "ms exceeds threshold " + slowRequestThresholdMs + "ms"
-            ));
+            addIfNotAcknowledged(alerts, requestId, "SLOW_REQUEST", "WARN",
+                    "Request duration " + totalDuration + "ms exceeds threshold " + slowRequestThresholdMs + "ms");
         }
 
         if (counter.errorCount > maxErrorNodes) {
-            alerts.add(new TraceAlert(
-                    requestId,
-                    "ERROR_NODES",
-                    "ERROR",
-                    counter.errorCount + " error node(s) detected (threshold: " + maxErrorNodes + ")"
-            ));
+            addIfNotAcknowledged(alerts, requestId, "ERROR_NODES", "ERROR",
+                    counter.errorCount + " error node(s) detected (threshold: " + maxErrorNodes + ")");
         }
 
         if (counter.nodeCount > 0 && errorRateThreshold > 0) {
             double rate = (double) counter.errorCount / counter.nodeCount;
             if (rate >= errorRateThreshold) {
-                alerts.add(new TraceAlert(
-                        requestId,
-                        "HIGH_ERROR_RATE",
-                        "ERROR",
+                addIfNotAcknowledged(alerts, requestId, "HIGH_ERROR_RATE", "ERROR",
                         String.format("Error rate %.0f%% exceeds threshold %.0f%%",
-                                rate * 100, errorRateThreshold * 100)
-                ));
+                                rate * 100, errorRateThreshold * 100));
             }
         }
 
         if (counter.nPlusOnePatterns > 0) {
-            alerts.add(new TraceAlert(
-                    requestId,
-                    "N_PLUS_ONE",
-                    "WARN",
-                    "N+1 query pattern detected (" + counter.nPlusOnePatterns + " occurrence(s))"
-            ));
+            addIfNotAcknowledged(alerts, requestId, "N_PLUS_ONE", "WARN",
+                    "N+1 query pattern detected (" + counter.nPlusOnePatterns + " occurrence(s))");
         }
 
         return alerts;
+    }
+
+    private void addIfNotAcknowledged(List<TraceAlert> list,
+                                      String requestId, String rule, String severity, String message) {
+        String id = requestId + "::" + rule;
+        if (!acknowledged.contains(id)) {
+            list.add(new TraceAlert(id, requestId, rule, severity, message));
+        }
     }
 
     private void collect(CallTreeNode node, AlertCounter counter) {
@@ -112,6 +117,13 @@ public class TraceAlertService {
         int nPlusOnePatterns;
     }
 
-    public record TraceAlert(String requestId, String rule, String severity, String message) {
+    /**
+     * @param id        composite id: {requestId}::{rule} — stable, deterministic
+     * @param requestId the originating trace
+     * @param rule      alert rule name (e.g. SLOW_REQUEST)
+     * @param severity  WARN or ERROR
+     * @param message   human-readable description
+     */
+    public record TraceAlert(String id, String requestId, String rule, String severity, String message) {
     }
 }

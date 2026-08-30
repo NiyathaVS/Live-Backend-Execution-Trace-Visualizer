@@ -80,6 +80,12 @@ public class TraceReplayController {
         return alertService.evaluateAll();
     }
 
+    @PostMapping("/alerts/{alertId}/acknowledge")
+    public Map<String, Object> acknowledgeAlert(@PathVariable String alertId) {
+        boolean added = alertService.acknowledge(alertId);
+        return Map.of("alertId", alertId, "acknowledged", true, "alreadyAcknowledged", !added);
+    }
+
     @GetMapping("/metrics")
     public MetricsDashboardReport getMetrics() {
         return collector.getMetricsDashboard();
@@ -88,6 +94,22 @@ public class TraceReplayController {
     @GetMapping("/metrics/dashboard")
     public MetricsDashboardReport getMetricsDashboard() {
         return collector.getMetricsDashboard();
+    }
+
+    /**
+     * Returns per-method rolling latency samples (up to 200 recent values per method).
+     * Shape: { "com.example.Foo.bar()": [12, 15, 11, ...], ... }
+     * Useful for trend sparklines on the frontend.
+     */
+    @GetMapping("/metrics/timeseries")
+    public Map<String, List<Long>> getLatencyTimeseries(
+            @RequestParam(required = false) String method) {
+        Map<String, List<Long>> all = collector.getMethodDurationHistory();
+        if (method != null && !method.isBlank()) {
+            List<Long> series = all.get(method);
+            return series != null ? Map.of(method, series) : Map.of();
+        }
+        return all;
     }
 
     @GetMapping("/{requestId}")
